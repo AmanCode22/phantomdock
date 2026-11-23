@@ -1,0 +1,52 @@
+{
+  "$schema": "phantomdock-adapter-v2",
+  "id": "qwen-chat",
+  "name": "Qwen Chat",
+  "hostMatch": ["chat.qwen.ai"],
+  "enabled": true,
+  "selectors": {
+    "chatContainer": "main",
+    "messageList": "[class*='message-list'], [class*='chat-messages'], main",
+    "userMessage": "[class*='user-message'], [data-role='user']",
+    "assistantMessage": "[class*='assistant-message'], [data-role='assistant'], [class*='bot-message']",
+    "messageMarkdownBody": ".markdown-body, [class*='prose'], [class*='markdown']",
+    "streamingIndicator": "[class*='stop-button'], button[aria-label*='Stop'], [class*='generating']",
+    "inputBox": "textarea, [contenteditable='true']",
+    "sendButton": "button[type='submit'], button[aria-label*='Send'], [class*='send-button']",
+    "pillMountAnchor": "form, [class*='input-container'], [class*='chat-input']",
+    "rateLimitBanner": "[class*='rate-limit'], [class*='error-toast'], [class*='quota']",
+    "challengeBanner": "iframe[src*='turnstile'], iframe[src*='arkoselabs'], iframe[src*='hcaptcha'], [class*='captcha']"
+  },
+  "fileUpload": {
+    "supported": true,
+    "preferInlineOverUpload": false,
+    "cascadeOrder": ["input", "paste", "drop"],
+    "fileInputSelector": "input[type='file']",
+    "dropZoneSelector": "form, [class*='input-container'], [class*='chat-input']",
+    "attachmentChipSelector": "[class*='file-card'], [class*='attachment'], [class*='upload-item']",
+    "uploadingSpinnerSelector": "[class*='uploading'], [class*='loading'], [role='progressbar']",
+    "uploadTimeoutMs": 10000,
+    "fallbackToInlineOnFailure": true
+  },
+  "inlineSkills": {
+    "chunkSizeChars": 6000,
+    "autoSendAllParts": false
+  },
+  "inputBehavior": {
+    "inputType": "auto",
+    "submitMethod": "click",
+    "submitDelayRangeMs": [400, 1400],
+    "interTurnDelayRangeMs": [3000, 8000],
+    "sendEnableTimeoutMs": 2500,
+    "randomizeClickCoords": true,
+    "clearBeforeInsert": true
+  },
+  "loopProtection": {
+    "requireVisibleTab": true,
+    "cooldownSeconds": 60,
+    "backoffMultiplier": 2,
+    "maxCooldownSeconds": 900,
+    "maxConsecutiveAutoTurns": 15,
+    "maxAutomatedTurnsPerHour": 60
+  }
+}

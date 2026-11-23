@@ -1,0 +1,64 @@
+{
+  "$schema": "phantomdock-adapter-v2",
+  "id": "universal-fallback",
+  "name": "Universal Fallback",
+  "hostMatch": [
+    "*"
+  ],
+  "enabled": true,
+  "selectors": {
+    "chatContainer": "body",
+    "messageList": "main, [class*='chat'], [class*='message'], [role='log'], body",
+    "userMessage": "[class*='user'], [data-role='user']",
+    "assistantMessage": "[class*='assistant'], [class*='bot'], [class*='ai'], [data-role='assistant']",
+    "messageMarkdownBody": "[class*='markdown'], [class*='prose'], [class*='message-content'], article, div",
+    "streamingIndicator": "button[aria-label*='Stop'], [class*='stop'], [class*='typing'], [class*='generating']",
+    "inputBox": "textarea, [contenteditable='true']",
+    "sendButton": "button[type='submit'], button[aria-label*='end'], button[aria-label*='Send'], button[class*='send']",
+    "pillMountAnchor": "form, [class*='input'], body",
+    "rateLimitBanner": "[class*='rate-limit'], [class*='error'], [role='alert']",
+    "challengeBanner": "iframe[src*='turnstile'], iframe[src*='arkoselabs'], iframe[src*='hcaptcha'], [class*='captcha']"
+  },
+  "fileUpload": {
+    "supported": true,
+    "preferInlineOverUpload": false,
+    "cascadeOrder": [
+      "input",
+      "paste",
+      "drop"
+    ],
+    "fileInputSelector": "input[type='file']",
+    "dropZoneSelector": "form, [class*='input-container'], [class*='chat-input']",
+    "attachmentChipSelector": "[class*='file-card'], [class*='attachment'], [class*='upload-item']",
+    "uploadingSpinnerSelector": "[class*='uploading'], [class*='loading'], [role='progressbar']",
+    "uploadTimeoutMs": 10000,
+    "fallbackToInlineOnFailure": true
+  },
+  "inlineSkills": {
+    "chunkSizeChars": 6000,
+    "autoSendAllParts": false
+  },
+  "inputBehavior": {
+    "inputType": "auto",
+    "submitMethod": "click",
+    "submitDelayRangeMs": [
+      400,
+      1400
+    ],
+    "interTurnDelayRangeMs": [
+      3000,
+      8000
+    ],
+    "sendEnableTimeoutMs": 2500,
+    "randomizeClickCoords": true,
+    "clearBeforeInsert": true
+  },
+  "loopProtection": {
+    "requireVisibleTab": true,
+    "cooldownSeconds": 60,
+    "backoffMultiplier": 2,
+    "maxCooldownSeconds": 900,
+    "maxConsecutiveAutoTurns": 15,
+    "maxAutomatedTurnsPerHour": 60
+  }
+}
