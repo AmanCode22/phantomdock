@@ -1,0 +1,20 @@
+# Rust
+phantomdock-cli/target/
+**/*.rs.bk
+
+# Node / extension
+phantomdock-ext/node_modules/
+phantomdock-ext/dist/
+*.tsbuildinfo
+
+# PhantomDock runtime artifacts
+.phantomdock/
+phantomdock.toml
+mcp.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
