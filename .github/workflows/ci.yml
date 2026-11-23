@@ -1,0 +1,129 @@
+# Continuous integration: Rust daemon + cross-browser extension.
+# Runs on every push to main and every pull request.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust daemon (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: phantomdock-cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, with fmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: phantomdock-cli
+
+      # Formatting and lint gates only run on Linux to keep the matrix fast.
+      - name: Enforce rustfmt
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --all --check
+
+      - name: Enforce clippy (-D warnings)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Unit + integration tests
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --locked
+
+      - name: Release build
+        run: cargo build --release --locked
+
+      - name: Smoke test (bind + handshake, Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          cd "$(mktemp -d)"
+          PD="$GITHUB_WORKSPACE/phantomdock-cli/target/release/pdock"
+          "$PD" > banner.log &
+          PID=$!
+          for i in $(seq 1 40); do grep -q "Pairing token" banner.log && break; sleep 0.25; done
+          PORT=$(grep -oE '127.0.0.1:[0-9]+' banner.log | head -1 | cut -d: -f2)
+          curl -sf -H "Origin: chrome-extension://ci" "http://127.0.0.1:$PORT/handshake" | tee handshake.json
+          grep -q '"protocol_version": *2' handshake.json
+          ! grep -qi 'token' handshake.json
+          kill $PID
+
+      - name: Upload pdock binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdock-${{ matrix.os }}
+          path: phantomdock-cli/target/release/pdock*
+          if-no-files-found: error
+
+  extension:
+    name: Extension (typecheck + tests + dual build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: phantomdock-ext
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: phantomdock-ext/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (tsc --noEmit)
+        run: npm run typecheck
+
+      - name: Unit tests (vitest)
+        run: npm run test
+
+      - name: Dual-target build (chrome + firefox) with bundle verification
+        run: npm run build
+
+      - name: Package chrome bundle
+        run: |
+          cd dist/chrome
+          zip -qr "../../phantomdock-ext-${{ github.sha }}-chrome.zip" .
+
+      - name: Package firefox bundle
+        run: |
+          cd dist/firefox
+          zip -qr "../../phantomdock-ext-${{ github.sha }}-firefox.zip" .
+
+      - name: Upload chrome bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: phantomdock-ext-chrome
+          path: phantomdock-ext/phantomdock-ext-${{ github.sha }}-chrome.zip
+          if-no-files-found: error
+
+      - name: Upload firefox bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: phantomdock-ext-firefox
+          path: phantomdock-ext/phantomdock-ext-${{ github.sha }}-firefox.zip
+          if-no-files-found: error

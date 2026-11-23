@@ -1,0 +1,128 @@
+# Release pipeline: triggered by pushing a v* tag (e.g. `git tag v0.1.0 && git push --tags`).
+# Builds the pdock daemon per-OS plus the chrome/firefox extension bundles,
+# and attaches everything (with SHA-256 checksums) to a GitHub Release.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  cli:
+    name: pdock daemon (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            archive: pdock-linux-x86_64.tar.gz
+          - os: windows-latest
+            archive: pdock-windows-x86_64.zip
+          - os: macos-latest
+            archive: pdock-macos-aarch64.tar.gz
+    defaults:
+      run:
+        working-directory: phantomdock-cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: phantomdock-cli
+
+      - name: Release build
+        run: cargo build --release --locked
+
+      - name: Package (unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          STAGE="${{ runner.temp }}/stage"
+          mkdir -p "$STAGE/pdock"
+          cp target/release/pdock "$STAGE/pdock/"
+          cp ../LICENSE "$STAGE/pdock/"
+          cp ../README.md "$STAGE/pdock/"
+          tar -czf "${{ runner.temp }}/${{ matrix.archive }}" -C "$STAGE" pdock
+
+      - name: Package (windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/release/pdock.exe" -DestinationPath "${{ runner.temp }}/${{ matrix.archive }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ runner.temp }}/${{ matrix.archive }}
+          if-no-files-found: error
+
+  extension:
+    name: Extension bundles
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: phantomdock-ext
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: phantomdock-ext/package-lock.json
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+
+      - name: Package bundles
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          (cd dist/chrome  && zip -qr "$GITHUB_WORKSPACE/phantomdock-ext-$VERSION-chrome.zip" .)
+          (cd dist/firefox && zip -qr "$GITHUB_WORKSPACE/phantomdock-ext-$VERSION-firefox.zip" .)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension-bundles
+          path: |
+            phantomdock-ext-*-chrome.zip
+            phantomdock-ext-*-firefox.zip
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub release
+    needs: [cli, extension]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd release-assets
+          sha256sum pdock-* phantomdock-ext-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/pdock-*
+            release-assets/phantomdock-ext-*
+            release-assets/SHA256SUMS
