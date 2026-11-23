@@ -74,7 +74,9 @@ impl Manager {
     }
 
     pub fn empty() -> Manager {
-        Manager { clients: Vec::new() }
+        Manager {
+            clients: Vec::new(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -116,7 +118,12 @@ impl Manager {
         v
     }
 
-    pub async fn call_tool(&self, server: &str, tool: &str, args: Value) -> Result<ToolOk, ToolError> {
+    pub async fn call_tool(
+        &self,
+        server: &str,
+        tool: &str,
+        args: Value,
+    ) -> Result<ToolOk, ToolError> {
         let client = self
             .clients
             .iter()
@@ -174,7 +181,10 @@ mod tests {
         assert_eq!(defs.len(), 2);
         assert_eq!(defs[0].0, "filesystem");
         assert_eq!(defs[1].0, "github");
-        assert_eq!(defs[1].1.env.get("GITHUB_TOKEN").map(|s| s.as_str()), Some("x"));
+        assert_eq!(
+            defs[1].1.env.get("GITHUB_TOKEN").map(|s| s.as_str()),
+            Some("x")
+        );
     }
 
     #[test]

@@ -22,7 +22,9 @@ async fn ws_round_trip_hello_tools_manifest_and_auth() {
         "pairing-token-123",
     );
     let app = server::build_router(state);
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         let _ = axum::serve(listener, app.into_make_service()).await;
@@ -30,21 +32,27 @@ async fn ws_round_trip_hello_tools_manifest_and_auth() {
 
     // 2. Wrong token must be rejected at the HTTP upgrade step.
     let bad = with_origin(
-        format!("ws://{addr}/ws?token=wrong-token").into_client_request().unwrap(),
+        format!("ws://{addr}/ws?token=wrong-token")
+            .into_client_request()
+            .unwrap(),
         "chrome-extension://abc",
     );
     assert!(tokio_tungstenite::connect_async(bad).await.is_err());
 
     // 3. Web origin must be rejected even with a valid token.
     let evil = with_origin(
-        format!("ws://{addr}/ws?token=pairing-token-123").into_client_request().unwrap(),
+        format!("ws://{addr}/ws?token=pairing-token-123")
+            .into_client_request()
+            .unwrap(),
         "https://evil.example",
     );
     assert!(tokio_tungstenite::connect_async(evil).await.is_err());
 
     // 4. Valid origin + token connects and receives hello.
     let good = with_origin(
-        format!("ws://{addr}/ws?token=pairing-token-123").into_client_request().unwrap(),
+        format!("ws://{addr}/ws?token=pairing-token-123")
+            .into_client_request()
+            .unwrap(),
         "chrome-extension://abc",
     );
     let (mut ws, _resp) = tokio_tungstenite::connect_async(good).await.unwrap();
@@ -69,7 +77,10 @@ async fn ws_round_trip_hello_tools_manifest_and_auth() {
     assert_eq!(res["id"], "call_01");
     assert_eq!(res["type"], "tool_result");
     assert_eq!(res["ok"], true, "read_file should succeed: {res}");
-    assert!(res["result"]["text"].as_str().unwrap().contains("hello workspace"));
+    assert!(res["result"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("hello workspace"));
 
     ws.send(Message::text(
         json!({"id": "call_02", "type": "tool_call", "tool": "run_shell",
@@ -83,9 +94,11 @@ async fn ws_round_trip_hello_tools_manifest_and_auth() {
     assert_eq!(res["error"]["code"], "SHELL_DISABLED");
 
     // 6. manifest returns the workspace_context XML.
-    ws.send(Message::text(json!({"id": "m1", "type": "manifest"}).to_string()))
-        .await
-        .unwrap();
+    ws.send(Message::text(
+        json!({"id": "m1", "type": "manifest"}).to_string(),
+    ))
+    .await
+    .unwrap();
     let res = next_json(&mut ws).await;
     assert_eq!(res["type"], "manifest_result");
     let xml = res["xml"].as_str().unwrap();
@@ -94,9 +107,11 @@ async fn ws_round_trip_hello_tools_manifest_and_auth() {
     assert!(xml.ends_with("</workspace_context>"));
 
     // 7. Unknown request type is rejected gracefully (no disconnect).
-    ws.send(Message::text(json!({"id": "x1", "type": "bogus"}).to_string()))
-        .await
-        .unwrap();
+    ws.send(Message::text(
+        json!({"id": "x1", "type": "bogus"}).to_string(),
+    ))
+    .await
+    .unwrap();
     let res = next_json(&mut ws).await;
     assert_eq!(res["type"], "error");
     assert_eq!(res["error"]["code"], "BAD_REQUEST");

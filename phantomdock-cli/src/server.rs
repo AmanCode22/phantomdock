@@ -17,11 +17,11 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::config::Config;
 use crate::mcp::Manager as McpManager;
 use crate::sandbox::Sandbox;
 use crate::skills::SkillsIndex;
 use crate::tools::{tool_infos_json, Registry, ToolContext};
-use crate::config::Config;
 use crate::{PROTOCOL_VERSION, VERSION};
 
 const KEEPALIVE_SECS: u64 = 20;
@@ -234,7 +234,7 @@ async fn handle_text(
                 let _ = tx.send(Message::Text(
                     json!({"id": id, "type": "tool_result", "ok": false,
                            "error": {"code": "INVALID_ARGS", "message": "missing 'tool'"}})
-                        .to_string(),
+                    .to_string(),
                 ));
                 return;
             }
@@ -282,7 +282,6 @@ async fn handle_text(
     }
 }
 
-
 /// Factory used by integration tests (and internal unit tests) to build a fully
 /// wired AppState against a real directory.
 pub mod test_support {
@@ -322,7 +321,9 @@ mod tests {
         let cwd = tmp.path().canonicalize().unwrap();
         let state = test_support::make_state(cwd, shell_enabled, "secret-token");
         // The factory hardcodes pid=process id; patch the fields the tests assert on.
-        let mut s = Arc::try_unwrap(state).ok().unwrap_or_else(|| unreachable!());
+        let mut s = Arc::try_unwrap(state)
+            .ok()
+            .unwrap_or_else(|| unreachable!());
         s.pid = 4242;
         s.port = 47800;
         let st = Arc::new(s);
@@ -350,12 +351,18 @@ mod tests {
             assert_eq!(v["skills_count"], 0);
             assert!(v["cwd"].is_string());
             let raw = String::from_utf8(body.to_vec()).unwrap();
-            assert!(!raw.contains("token"), "handshake must never expose the token");
+            assert!(
+                !raw.contains("token"),
+                "handshake must never expose the token"
+            );
             assert!(!raw.contains("secret-token"));
         }
 
         // Missing Origin (local curl-style tooling) is allowed.
-        let req = Request::builder().uri("/handshake").body(Body::empty()).unwrap();
+        let req = Request::builder()
+            .uri("/handshake")
+            .body(Body::empty())
+            .unwrap();
         let res = app.clone().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
     }
@@ -375,7 +382,11 @@ mod tests {
                 .body(Body::empty())
                 .unwrap();
             let res = app.clone().oneshot(req).await.unwrap();
-            assert_eq!(res.status(), StatusCode::FORBIDDEN, "origin {origin} must be rejected");
+            assert_eq!(
+                res.status(),
+                StatusCode::FORBIDDEN,
+                "origin {origin} must be rejected"
+            );
         }
     }
 

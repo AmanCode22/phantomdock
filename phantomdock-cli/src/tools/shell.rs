@@ -147,7 +147,9 @@ mod tests {
             mcp: &mcp,
             shell_enabled: true,
         };
-        let ok = run(&json!({"command": "echo hello && echo err >&2"}), &ctx).await.unwrap();
+        let ok = run(&json!({"command": "echo hello && echo err >&2"}), &ctx)
+            .await
+            .unwrap();
         assert_eq!(ok.status, "ok");
         assert!(ok.text.contains("hello"));
         assert!(ok.text.contains("err"));
@@ -167,12 +169,9 @@ mod tests {
             shell_enabled: true,
         };
         let started = std::time::Instant::now();
-        let ok = run(
-            &json!({"command": "sleep 30", "timeout_ms": 700}),
-            &ctx,
-        )
-        .await
-        .unwrap();
+        let ok = run(&json!({"command": "sleep 30", "timeout_ms": 700}), &ctx)
+            .await
+            .unwrap();
         assert_eq!(ok.status, "timeout");
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(ok.text.contains("TIMEOUT"));

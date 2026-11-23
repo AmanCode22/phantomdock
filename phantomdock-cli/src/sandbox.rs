@@ -75,7 +75,9 @@ impl Sandbox {
         let target = self.absolute(p);
         let canon = target.canonicalize()?;
         if !canon.starts_with(&self.cwd) {
-            return Err(SandboxError::OutsideWorkspace { path: p.to_path_buf() });
+            return Err(SandboxError::OutsideWorkspace {
+                path: p.to_path_buf(),
+            });
         }
         self.check_denied(&canon, p)?;
         Ok(canon)
@@ -97,20 +99,26 @@ impl Sandbox {
                     ancestor = parent.to_path_buf();
                 }
                 _ => {
-                    return Err(SandboxError::OutsideWorkspace { path: p.to_path_buf() });
+                    return Err(SandboxError::OutsideWorkspace {
+                        path: p.to_path_buf(),
+                    });
                 }
             }
         }
         let mut cur = ancestor.canonicalize()?;
         if !cur.starts_with(&self.cwd) {
-            return Err(SandboxError::OutsideWorkspace { path: p.to_path_buf() });
+            return Err(SandboxError::OutsideWorkspace {
+                path: p.to_path_buf(),
+            });
         }
         for name in tail.iter().rev() {
             cur = cur.join(name);
             if cur.exists() {
                 cur = cur.canonicalize()?;
                 if !cur.starts_with(&self.cwd) {
-                    return Err(SandboxError::OutsideWorkspace { path: p.to_path_buf() });
+                    return Err(SandboxError::OutsideWorkspace {
+                        path: p.to_path_buf(),
+                    });
                 }
             }
         }
@@ -173,7 +181,11 @@ mod tests {
     use tempfile::TempDir;
 
     fn sandbox_in(tmp: &TempDir) -> Sandbox {
-        Sandbox::new(tmp.path().to_path_buf(), DEFAULT_TEST_GLOBS.iter().map(|s| s.to_string()).collect()).unwrap()
+        Sandbox::new(
+            tmp.path().to_path_buf(),
+            DEFAULT_TEST_GLOBS.iter().map(|s| s.to_string()).collect(),
+        )
+        .unwrap()
     }
 
     const DEFAULT_TEST_GLOBS: &[&str] = &[".env", ".env.*", "*.pem", "*.key", "id_rsa*", ".git/**"];
@@ -194,7 +206,9 @@ mod tests {
     fn escape_via_dotdot_is_rejected() {
         let tmp = TempDir::new().unwrap();
         let sb = sandbox_in(&tmp);
-        let err = sb.resolve_existing(Path::new("../../../etc/passwd")).unwrap_err();
+        let err = sb
+            .resolve_existing(Path::new("../../../etc/passwd"))
+            .unwrap_err();
         assert!(matches!(err, SandboxError::OutsideWorkspace { .. }));
     }
 
@@ -242,13 +256,21 @@ mod tests {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(&p, "ok").unwrap();
-        assert!(sb.resolve_existing(Path::new("src/deep/new/file.txt")).is_ok());
+        assert!(sb
+            .resolve_existing(Path::new("src/deep/new/file.txt"))
+            .is_ok());
     }
 
     #[test]
     fn deny_list_blocks_secrets() {
         let tmp = TempDir::new().unwrap();
-        for name in [".env", ".env.production", "server.pem", "id_rsa", "id_rsa.pub"] {
+        for name in [
+            ".env",
+            ".env.production",
+            "server.pem",
+            "id_rsa",
+            "id_rsa.pub",
+        ] {
             fs::write(tmp.path().join(name), "secret").unwrap();
         }
         fs::create_dir_all(tmp.path().join(".git")).unwrap();

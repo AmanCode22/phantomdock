@@ -43,10 +43,7 @@ pub fn discover(extra_dirs: &[PathBuf]) -> SkillsIndex {
 
 /// Discovery with an explicit workspace root (testable without cwd games).
 pub fn discover_in(cwd: &std::path::Path, extra_dirs: &[PathBuf]) -> SkillsIndex {
-    let mut dirs: Vec<PathBuf> = vec![
-        cwd.join(".phantomdock/skills"),
-        cwd.join(".agents/skills"),
-    ];
+    let mut dirs: Vec<PathBuf> = vec![cwd.join(".phantomdock/skills"), cwd.join(".agents/skills")];
     if let Some(home) = std::env::var_os("HOME") {
         dirs.push(PathBuf::from(home).join(".config/phantomdock/skills"));
     }
@@ -60,7 +57,9 @@ pub fn discover_in(cwd: &std::path::Path, extra_dirs: &[PathBuf]) -> SkillsIndex
 
     let mut by_name: BTreeMap<String, Skill> = BTreeMap::new();
     for d in dirs {
-        let Ok(read_dir) = std::fs::read_dir(&d) else { continue };
+        let Ok(read_dir) = std::fs::read_dir(&d) else {
+            continue;
+        };
         let mut subdirs: Vec<PathBuf> = read_dir
             .flatten()
             .map(|e| e.path())
@@ -72,7 +71,9 @@ pub fn discover_in(cwd: &std::path::Path, extra_dirs: &[PathBuf]) -> SkillsIndex
             if !skill_md.is_file() {
                 continue;
             }
-            let Some(dir_name) = skill_dir.file_name().map(|n| n.to_string_lossy().to_string())
+            let Some(dir_name) = skill_dir
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
             else {
                 continue;
             };
@@ -220,7 +221,7 @@ mod tests {
         fs::create_dir_all(&pdf_dir).unwrap();
         fs::write(pdf_dir.join("SKILL.md"), "# PDF tools\nWork with PDFs.").unwrap();
 
-        let index = discover_in(tmp.path(), &[custom_root.clone()]);
+        let index = discover_in(tmp.path(), std::slice::from_ref(&custom_root));
 
         let grill = index.find("grill-me").expect("workspace skill found");
         assert_eq!(grill.description, "workspace copy");
@@ -232,13 +233,23 @@ mod tests {
     #[test]
     fn workspace_overrides_same_named_global_skill() {
         let tmp = TempDir::new().unwrap();
-        for (root, desc) in [(".phantomdock/skills/grill-me", "workspace copy"), (".agents/skills/grill-me", "agents copy")] {
+        for (root, desc) in [
+            (".phantomdock/skills/grill-me", "workspace copy"),
+            (".agents/skills/grill-me", "agents copy"),
+        ] {
             let dir = tmp.path().join(root);
             fs::create_dir_all(&dir).unwrap();
-            fs::write(dir.join("SKILL.md"), format!("---\nname: grill-me\ndescription: {desc}\n---\nbody")).unwrap();
+            fs::write(
+                dir.join("SKILL.md"),
+                format!("---\nname: grill-me\ndescription: {desc}\n---\nbody"),
+            )
+            .unwrap();
         }
         let index = discover_in(tmp.path(), &[]);
         assert_eq!(index.skills.len(), 1, "same-name skills collapse");
-        assert_eq!(index.find("grill-me").unwrap().description, "workspace copy");
+        assert_eq!(
+            index.find("grill-me").unwrap().description,
+            "workspace copy"
+        );
     }
 }

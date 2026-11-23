@@ -8,10 +8,10 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::Path;
 
+use crate::config::Config;
 use crate::mcp::Manager as McpManager;
 use crate::sandbox::Sandbox;
 use crate::skills::SkillsIndex;
-use crate::config::Config;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolCategory {
@@ -116,16 +116,20 @@ pub fn require_str(args: &Value, key: &str) -> Result<String, ToolError> {
     args.get(key)
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| ToolError::new("INVALID_ARGS", format!("missing or non-string argument '{key}'")))
+        .ok_or_else(|| {
+            ToolError::new(
+                "INVALID_ARGS",
+                format!("missing or non-string argument '{key}'"),
+            )
+        })
 }
 
 pub fn opt_str(args: &Value, key: &str) -> Result<Option<String>, ToolError> {
     match args.get(key) {
         None | Some(Value::Null) => Ok(None),
-        Some(v) => v
-            .as_str()
-            .map(|s| Some(s.to_string()))
-            .ok_or_else(|| ToolError::new("INVALID_ARGS", format!("argument '{key}' must be a string"))),
+        Some(v) => v.as_str().map(|s| Some(s.to_string())).ok_or_else(|| {
+            ToolError::new("INVALID_ARGS", format!("argument '{key}' must be a string"))
+        }),
     }
 }
 
@@ -166,9 +170,7 @@ impl Registry {
         }
         let result = self.execute_inner(name, args, ctx).await?;
         // Central oversized-output offloading for plain text results.
-        if result.delivery.is_none()
-            && result.text.chars().count() > ctx.config.max_inline_chars
-        {
+        if result.delivery.is_none() && result.text.chars().count() > ctx.config.max_inline_chars {
             return crate::offload::offload(&ctx.call_id, &result.text, ctx.sandbox);
         }
         Ok(result)
@@ -206,11 +208,16 @@ impl Registry {
                     }
                     _ => Err(ToolError::new(
                         "INVALID_ARGS",
-                        format!("malformed MCP tool name '{other}' (expected mcp__<server>__<tool>)"),
+                        format!(
+                            "malformed MCP tool name '{other}' (expected mcp__<server>__<tool>)"
+                        ),
                     )),
                 }
             }
-            other => Err(ToolError::new("INVALID_ARGS", format!("unknown tool '{other}'"))),
+            other => Err(ToolError::new(
+                "INVALID_ARGS",
+                format!("unknown tool '{other}'"),
+            )),
         }
     }
 }
@@ -323,7 +330,9 @@ pub fn build_workspace_context(
         cwd.display(),
         shell_enabled
     ));
-    s.push_str("You have direct access to the user's local workspace, Agent Skills, and MCP tools.\n");
+    s.push_str(
+        "You have direct access to the user's local workspace, Agent Skills, and MCP tools.\n",
+    );
     s.push_str("To invoke one or more tools, output fenced `pdock_call` JSON code blocks and IMMEDIATELY STOP generating text. Wait for the user's `<tool_result>` message before continuing.\n\n");
     s.push_str("Syntax (STRICT — must be a fenced code block with valid JSON):\n");
     s.push_str("```pdock_call\n{\"id\":\"call_01\",\"name\":\"TOOL_NAME\",\"args\":{\"arg\":\"value\"}}\n```\n\n");
@@ -392,7 +401,8 @@ mod tests {
         assert!(!xml.contains("run_shell"));
         assert!(xml.ends_with("</workspace_context>"));
 
-        let xml_shell = build_workspace_context(true, &McpManager::empty(), &index, Path::new("/w"));
+        let xml_shell =
+            build_workspace_context(true, &McpManager::empty(), &index, Path::new("/w"));
         assert!(xml_shell.contains("run_shell"));
     }
 }

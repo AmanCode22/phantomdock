@@ -123,7 +123,8 @@ pub fn edit_file(args: &Value, ctx: &ToolContext<'_>) -> Result<ToolOk, ToolErro
     }
 
     let target = resolve_existing(ctx, &path)?;
-    let content = fs::read_to_string(&target).map_err(|e| ToolError::new("IO_ERROR", e.to_string()))?;
+    let content =
+        fs::read_to_string(&target).map_err(|e| ToolError::new("IO_ERROR", e.to_string()))?;
 
     // Locate every occurrence (with 1-based line numbers) to enforce exact-once.
     let mut occurrences: Vec<usize> = Vec::new();
@@ -209,7 +210,10 @@ pub fn list_dir(args: &Value, ctx: &ToolContext<'_>) -> Result<ToolOk, ToolError
             if ctx.sandbox.denied_glob_for(&p).is_some() {
                 continue; // silently skip denied entries
             }
-            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             let child_rel = if rel.is_empty() {
                 name.clone()
             } else {
@@ -283,14 +287,25 @@ pub fn search_files(args: &Value, ctx: &ToolContext<'_>) -> Result<ToolOk, ToolE
             if ctx.sandbox.denied_glob_for(&p).is_some() {
                 continue;
             }
-            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             let child_rel = if rel.is_empty() {
                 name.clone()
             } else {
                 format!("{rel}/{name}")
             };
             if p.is_dir() {
-                walk(ctx, re, &p, &child_rel, depth_left - 1, matches, files_scanned);
+                walk(
+                    ctx,
+                    re,
+                    &p,
+                    &child_rel,
+                    depth_left - 1,
+                    matches,
+                    files_scanned,
+                );
             } else {
                 let Ok(meta) = entry.metadata() else { continue };
                 if meta.len() > MAX_FILE_BYTES {
@@ -315,7 +330,15 @@ pub fn search_files(args: &Value, ctx: &ToolContext<'_>) -> Result<ToolOk, ToolE
         }
     }
 
-    walk(ctx, &re, &root, "", MAX_DEPTH, &mut matches, &mut files_scanned);
+    walk(
+        ctx,
+        &re,
+        &root,
+        "",
+        MAX_DEPTH,
+        &mut matches,
+        &mut files_scanned,
+    );
     let mut out = format!(
         "pattern: {pattern} — {} match(es) in {files_scanned} file(s)\n",
         matches.len()
@@ -339,7 +362,11 @@ mod tests {
 
     fn ctx_in(tmp: &TempDir) -> (Sandbox, Config) {
         (
-            Sandbox::new(tmp.path().to_path_buf(), vec![".env".into(), "*.pem".into()]).unwrap(),
+            Sandbox::new(
+                tmp.path().to_path_buf(),
+                vec![".env".into(), "*.pem".into()],
+            )
+            .unwrap(),
             Config::default(),
         )
     }
@@ -360,9 +387,17 @@ mod tests {
     }
 
     fn setup_workspace(tmp: &TempDir) {
-        fs::write(tmp.path().join("app.rs"), "fn main() {\n    let x = 1;\n    println!(\"{{x}}\");\n}\n").unwrap();
+        fs::write(
+            tmp.path().join("app.rs"),
+            "fn main() {\n    let x = 1;\n    println!(\"{{x}}\");\n}\n",
+        )
+        .unwrap();
         fs::create_dir_all(tmp.path().join("src")).unwrap();
-        fs::write(tmp.path().join("src/lib.rs"), "pub fn a() -> u32 { 1 }\npub fn b() -> u32 { 2 }\n").unwrap();
+        fs::write(
+            tmp.path().join("src/lib.rs"),
+            "pub fn a() -> u32 { 1 }\npub fn b() -> u32 { 2 }\n",
+        )
+        .unwrap();
         fs::write(tmp.path().join(".env"), "SECRET=1").unwrap();
         fs::write(tmp.path().join("key.pem"), "-----BEGIN").unwrap();
     }
@@ -379,7 +414,10 @@ mod tests {
                 ctx,
             )
             .unwrap();
-            assert_eq!(ranged.text, "[src/lib.rs: 1 of 2 lines]\npub fn b() -> u32 { 2 }");
+            assert_eq!(
+                ranged.text,
+                "[src/lib.rs: 1 of 2 lines]\npub fn b() -> u32 { 2 }"
+            );
         });
     }
 

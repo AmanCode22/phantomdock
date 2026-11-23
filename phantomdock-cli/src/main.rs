@@ -60,9 +60,7 @@ async fn select_listener(port: Option<u16>) -> std::io::Result<tokio::net::TcpLi
                     Err(e) => return Err(e),
                 }
             }
-            Err(last.unwrap_or_else(|| {
-                std::io::Error::other("no free port in 47800-47820 range")
-            }))
+            Err(last.unwrap_or_else(|| std::io::Error::other("no free port in 47800-47820 range")))
         }
     }
 }

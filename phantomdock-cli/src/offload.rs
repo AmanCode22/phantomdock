@@ -114,7 +114,10 @@ mod tests {
     fn oversized_output_offloads_with_preview() {
         let tmp = TempDir::new().unwrap();
         let sb = Sandbox::new(tmp.path().to_path_buf(), vec![]).unwrap();
-        let big = (0..500).map(|i| format!("line {i:04} — some content here")).collect::<Vec<_>>().join("\n");
+        let big = (0..500)
+            .map(|i| format!("line {i:04} — some content here"))
+            .collect::<Vec<_>>()
+            .join("\n");
 
         let ok = offload("call_01", &big, &sb).unwrap();
         assert_eq!(ok.status, "offloaded");
@@ -152,7 +155,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         std::fs::write(
             tmp.path().join("big.txt"),
-            (0..600).map(|i| format!("row {i:03} padding padding padding")).collect::<Vec<_>>().join("\n"),
+            (0..600)
+                .map(|i| format!("row {i:03} padding padding padding"))
+                .collect::<Vec<_>>()
+                .join("\n"),
         )
         .unwrap();
         let sb = Sandbox::new(tmp.path().to_path_buf(), vec![]).unwrap();
@@ -176,6 +182,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ok.status, "offloaded");
-        assert!(tmp.path().join(".phantomdock/outputs/call_big.txt").exists());
+        assert!(tmp
+            .path()
+            .join(".phantomdock/outputs/call_big.txt")
+            .exists());
     }
 }

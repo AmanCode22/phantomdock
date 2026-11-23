@@ -155,7 +155,11 @@ mod tests {
             // Paragraph-level blocks stay under budget; only atomic code fences may exceed.
             let fence_lines = p.text.lines().any(|l| l.trim_start().starts_with("```"));
             if !fence_lines {
-                assert!(p.text.chars().count() <= 120, "part too big: {}", p.text.len());
+                assert!(
+                    p.text.chars().count() <= 120,
+                    "part too big: {}",
+                    p.text.len()
+                );
             }
         }
     }
@@ -182,7 +186,11 @@ mod tests {
         let parts = split_markdown(&s, 300);
         assert!(parts.len() > 1);
         for p in &parts {
-            let open = p.text.lines().filter(|l| l.trim_start().starts_with("```")).count();
+            let open = p
+                .text
+                .lines()
+                .filter(|l| l.trim_start().starts_with("```"))
+                .count();
             assert_eq!(open % 2, 0, "unbalanced fences in part: {}", p.text);
         }
     }

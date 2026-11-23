@@ -77,9 +77,7 @@ pub fn activate(args: &Value, ctx: &ToolContext<'_>) -> Result<ToolOk, ToolError
             for (i, h) in section.outline.iter().enumerate() {
                 outline.push_str(&format!("  {}. {}\n", i + 1, h));
             }
-            format!(
-                "[Skill: {name} | Part {p} of {total}]\nOutline of this part:\n{outline}\n"
-            )
+            format!("[Skill: {name} | Part {p} of {total}]\nOutline of this part:\n{outline}\n")
         } else {
             format!("[Skill: {name} | complete]\n")
         };
@@ -175,8 +173,7 @@ pub fn read_resource(args: &Value, ctx: &ToolContext<'_>) -> Result<ToolOk, Tool
         ));
     }
 
-    let meta = std::fs::metadata(&canon)
-        .map_err(|e| ToolError::new("IO_ERROR", e.to_string()))?;
+    let meta = std::fs::metadata(&canon).map_err(|e| ToolError::new("IO_ERROR", e.to_string()))?;
     if meta.len() > 2_000_000 && (start.is_none() || end.is_none()) {
         return Err(ToolError::new(
             "INVALID_ARGS",
@@ -219,7 +216,11 @@ mod tests {
         let dir = tmp.path().join("grill-me");
         std::fs::create_dir_all(dir.join("references")).unwrap();
         std::fs::write(dir.join("SKILL.md"), body).unwrap();
-        std::fs::write(dir.join("references/cheatsheet.txt"), "line1\nline2\nline3\n").unwrap();
+        std::fs::write(
+            dir.join("references/cheatsheet.txt"),
+            "line1\nline2\nline3\n",
+        )
+        .unwrap();
         let index = SkillsIndex {
             skills: vec![Skill {
                 name: "grill-me".to_string(),
@@ -257,7 +258,9 @@ mod tests {
         let ok = activate(&json!({"name": "grill-me"}), &ctx).unwrap();
         assert_eq!(ok.status, "upload_ready");
         match &ok.delivery.unwrap() {
-            Delivery::Upload { filename, content, .. } => {
+            Delivery::Upload {
+                filename, content, ..
+            } => {
                 assert_eq!(filename, "grill-me-skill.md");
                 assert!(content.contains("# Grill Me"));
                 assert!(content.contains("references/"));
@@ -291,7 +294,9 @@ mod tests {
         let p1 = activate(&json!({"name": "grill-me", "mode": "inline"}), &ctx).unwrap();
         assert_eq!(p1.status, "inline_part");
         match &p1.delivery.unwrap() {
-            Delivery::InlinePart { part, total_parts, .. } => {
+            Delivery::InlinePart {
+                part, total_parts, ..
+            } => {
                 assert_eq!(*part, 1);
                 assert!(*total_parts > 1);
             }

@@ -140,18 +140,9 @@ impl Client {
         cmd.kill_on_drop(true);
         let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
 
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "no stdin".to_string())?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "no stdout".to_string())?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| "no stderr".to_string())?;
+        let mut stdin = child.stdin.take().ok_or_else(|| "no stdin".to_string())?;
+        let stdout = child.stdout.take().ok_or_else(|| "no stdout".to_string())?;
+        let stderr = child.stderr.take().ok_or_else(|| "no stderr".to_string())?;
 
         // Channel-based line writer so request() can send while awaiting replies.
         let (wtx, wrx) = mpsc::unbounded_channel::<String>();
@@ -177,22 +168,17 @@ impl Client {
             let pending = self.pending.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stdout).lines();
-                loop {
-                    match lines.next_line().await {
-                        Ok(Some(line)) => {
-                            let trimmed = line.trim();
-                            if trimmed.is_empty() {
-                                continue;
-                            }
-                            if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
-                                if let Some(id) = v.get("id").and_then(|i| i.as_u64()) {
-                                    if let Some(tx) = pending.lock().unwrap().remove(&id) {
-                                        let _ = tx.send(v);
-                                    }
-                                }
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+                        if let Some(id) = v.get("id").and_then(|i| i.as_u64()) {
+                            if let Some(tx) = pending.lock().unwrap().remove(&id) {
+                                let _ = tx.send(v);
                             }
                         }
-                        _ => break,
                     }
                 }
                 // Stream closed — fail every in-flight request.
@@ -261,7 +247,12 @@ impl Client {
         }
     }
 
-    async fn request(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, String> {
+    async fn request(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         let id = self.next_id();
         let (tx, rx) = oneshot::channel::<Value>();
         self.pending.lock().unwrap().insert(id, tx);
@@ -305,7 +296,10 @@ impl Client {
                 if e == "timeout" {
                     ToolError::new(
                         "MCP_TIMEOUT",
-                        format!("mcp tool '{}/{}' timed out after {:?}", self.name, tool, timeout),
+                        format!(
+                            "mcp tool '{}/{}' timed out after {:?}",
+                            self.name, tool, timeout
+                        ),
                     )
                 } else {
                     ToolError::new(
@@ -422,8 +416,7 @@ done
         std::fs::write(&script_path, script).unwrap();
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
-                .unwrap();
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
 
         let client = Arc::new(Client::new(
@@ -445,7 +438,11 @@ done
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        assert_eq!(client.health(), Health::Healthy, "fake server should be healthy");
+        assert_eq!(
+            client.health(),
+            Health::Healthy,
+            "fake server should be healthy"
+        );
         let tools = client.tools();
         assert_eq!(tools[0].name, "echo");
 
