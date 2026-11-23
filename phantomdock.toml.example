@@ -1,0 +1,33 @@
+# PhantomDock daemon configuration example.
+# Copy to ./phantomdock.toml (workspace) or ~/.config/phantomdock/config.toml (global).
+# Workspace file wins over the global one.
+
+# Max characters of tool output returned inline in chat. Larger outputs are
+# offloaded to .phantomdock/outputs/<call_id>.txt with a head/tail preview.
+max_inline_chars = 16000
+
+# Chunk size (chars) for chunked inline skill delivery (Markdown-boundary aware).
+inline_skill_chunk_chars = 6000
+
+# Per-tool timeout for MCP stdio servers.
+mcp_tool_timeout_secs = 30
+
+# Extra skill directories (scanned after workspace and global dirs).
+skill_dirs = []
+
+[sandbox]
+# Sensitive-file deny-list: reading, writing, listing, and searching are all
+# blocked for matching paths. Replace the defaults entirely by setting this.
+deny_globs = [
+  ".env",
+  ".env.*",
+  "*.pem",
+  "*.key",
+  "id_rsa*",
+  ".git/**",
+]
+
+# Alternatively, keep the defaults and add per-project globs in .phantomdockignore:
+#   $ cat .phantomdockignore
+#   *.vault
+#   secrets/**
