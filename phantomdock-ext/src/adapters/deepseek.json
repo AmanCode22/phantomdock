@@ -7,16 +7,16 @@
   ],
   "enabled": true,
   "selectors": {
-    "chatContainer": "main",
-    "messageList": "[class*='message-list'], [class*='chat-messages'], [class*='conversation']",
-    "userMessage": "[class*='user-message'], [class*='msg-user'], [data-role='user']",
-    "assistantMessage": "[class*='assistant-message'], [class*='msg-assistant'], [data-role='assistant']",
-    "messageMarkdownBody": ".markdown-body, [class*='markdown'], [class*='prose']",
+    "chatContainer": ".ds-virtual-list, body",
+    "messageList": ".ds-virtual-list-items, .ds-virtual-list-visible-items, .ds-virtual-list",
+    "userMessage": ".ds-message:has(.ds-collapsible-text), .ds-message",
+    "assistantMessage": ".ds-message:has(.ds-assistant-message-main-content)",
+    "messageMarkdownBody": ".ds-markdown, .ds-assistant-message-main-content, .ds-markdown-paragraph",
     "streamingIndicator": "[class*='stop-button'], button[aria-label*='Stop'], [class*='generating']",
-    "inputBox": "textarea, [contenteditable='true']",
-    "sendButton": "button[type='submit'], button[aria-label*='Send'], [class*='send-button']",
-    "pillMountAnchor": "form, [class*='input-container'], [class*='chat-input']",
-    "rateLimitBanner": "[class*='rate-limit'], [class*='error-toast'], [class*='server-busy']",
+    "inputBox": "textarea[placeholder*='DeepSeek'], textarea, [contenteditable='true']",
+    "sendButton": "[role='button'].ds-button--primary, .ds-button--circle, button[type='submit'], button[aria-label*='Send']",
+    "pillMountAnchor": ".ds-virtual-list--printable, [class*='aaff8b8f']",
+    "rateLimitBanner": ".ds-notification-container, [class*='server-busy'], [class*='rate-limit']",
     "challengeBanner": "iframe[src*='turnstile'], iframe[src*='arkoselabs'], iframe[src*='hcaptcha'], [class*='captcha']"
   },
   "fileUpload": {
@@ -28,7 +28,7 @@
       "drop"
     ],
     "fileInputSelector": "input[type='file']",
-    "dropZoneSelector": "form, [class*='input-container'], [class*='chat-input']",
+    "dropZoneSelector": "[class*='aaff8b8f'], [class*='_871cbca'], .ds-virtual-list--printable",
     "attachmentChipSelector": "[class*='file-card'], [class*='attachment'], [class*='upload-item']",
     "uploadingSpinnerSelector": "[class*='uploading'], [class*='loading'], [role='progressbar']",
     "uploadTimeoutMs": 10000,
@@ -39,7 +39,7 @@
     "autoSendAllParts": false
   },
   "inputBehavior": {
-    "inputType": "auto",
+    "inputType": "textarea",
     "submitMethod": "click",
     "submitDelayRangeMs": [
       400,
