@@ -97,7 +97,9 @@ exposed via `/handshake` and never leaves localhost).
 ```bash
 cd phantomdock-ext
 npm ci
-npm run build          # typechecks? no — build only; run `npm run typecheck` + `npm run test` too
+npm run typecheck      # tsc --noEmit
+npm run test           # vitest (38 tests)
+npm run build          # dual chrome/firefox bundles + verification
 ```
 
 - **Chrome / Edge / Brave / Zen (Chromium):** `chrome://extensions` → Developer mode →
