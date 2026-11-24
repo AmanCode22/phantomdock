@@ -3,6 +3,7 @@ import { validateAdapter } from '../src/adapters/schema';
 import qwen from '../src/adapters/qwen.json';
 import deepseek from '../src/adapters/deepseek.json';
 import chatgpt from '../src/adapters/chatgpt.json';
+import gemini from '../src/adapters/gemini.json';
 import universal from '../src/adapters/universal.json';
 
 describe('bundled adapter presets', () => {
@@ -10,6 +11,7 @@ describe('bundled adapter presets', () => {
     ['qwen-chat', qwen],
     ['deepseek-chat', deepseek],
     ['chatgpt', chatgpt],
+    ['gemini', gemini],
     ['universal-fallback', universal],
   ])('validates %s against schema v2', (_label, def) => {
     const res = validateAdapter(def);
@@ -20,6 +22,8 @@ describe('bundled adapter presets', () => {
     expect(qwen.id).toBe('qwen-chat');
     expect(deepseek.id).toBe('deepseek-chat');
     expect(chatgpt.id).toBe('chatgpt');
+    expect(gemini.id).toBe('gemini');
+    expect(gemini.hostMatch).toContain('gemini.google.com');
     expect(universal.id).toBe('universal-fallback');
   });
 

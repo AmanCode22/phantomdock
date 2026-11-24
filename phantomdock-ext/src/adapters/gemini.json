@@ -1,0 +1,64 @@
+{
+  "$schema": "phantomdock-adapter-v2",
+  "id": "gemini",
+  "name": "Google Gemini",
+  "hostMatch": [
+    "gemini.google.com"
+  ],
+  "enabled": true,
+  "selectors": {
+    "chatContainer": "chat-window, infinite-scroller, main, body",
+    "messageList": "infinite-scroller, .conversation-container, chat-window-content",
+    "userMessage": "user-query, user-query-content, .user-query-container",
+    "assistantMessage": "model-response, response-container, .model-response-text",
+    "messageMarkdownBody": "message-content .markdown, .markdown-main-panel, message-content, .markdown",
+    "streamingIndicator": "button[aria-label*='Stop'], [aria-label*='Stop response'], .stop-icon, mat-icon[fonticon='stop'], .response-streaming",
+    "inputBox": "rich-textarea .ql-editor[contenteditable='true'], div.ql-editor[contenteditable='true'], rich-textarea [contenteditable='true'], [role='textbox'][contenteditable='true'], textarea",
+    "sendButton": "button.send-button, button[aria-label*='Send message'], button[aria-label*='Send'], .send-button-container button",
+    "pillMountAnchor": "input-area-v2, .input-area-container, input-container, form",
+    "rateLimitBanner": "[class*='rate-limit'], [class*='quota-exceeded']",
+    "challengeBanner": "iframe[src*='recaptcha'], iframe[src*='turnstile'], iframe[src*='hcaptcha'], [class*='captcha']"
+  },
+  "fileUpload": {
+    "supported": true,
+    "preferInlineOverUpload": false,
+    "cascadeOrder": [
+      "input",
+      "paste",
+      "drop"
+    ],
+    "fileInputSelector": "input[type='file']",
+    "dropZoneSelector": "input-area-v2, .input-area-container, rich-textarea",
+    "attachmentChipSelector": "uploader-file-preview, [class*='file-preview'], [class*='attachment'], [class*='file-card']",
+    "uploadingSpinnerSelector": "mat-progress-spinner, [class*='uploading'], [role='progressbar']",
+    "uploadTimeoutMs": 10000,
+    "fallbackToInlineOnFailure": true
+  },
+  "inlineSkills": {
+    "chunkSizeChars": 6000,
+    "autoSendAllParts": false
+  },
+  "inputBehavior": {
+    "inputType": "contenteditable",
+    "submitMethod": "click",
+    "submitDelayRangeMs": [
+      400,
+      1400
+    ],
+    "interTurnDelayRangeMs": [
+      3000,
+      8000
+    ],
+    "sendEnableTimeoutMs": 2500,
+    "randomizeClickCoords": true,
+    "clearBeforeInsert": true
+  },
+  "loopProtection": {
+    "requireVisibleTab": true,
+    "cooldownSeconds": 60,
+    "backoffMultiplier": 2,
+    "maxCooldownSeconds": 900,
+    "maxConsecutiveAutoTurns": 15,
+    "maxAutomatedTurnsPerHour": 60
+  }
+}

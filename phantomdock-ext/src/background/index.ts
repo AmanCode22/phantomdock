@@ -5,6 +5,7 @@
 import qwen from '../adapters/qwen.json';
 import deepseek from '../adapters/deepseek.json';
 import chatgpt from '../adapters/chatgpt.json';
+import gemini from '../adapters/gemini.json';
 import universal from '../adapters/universal.json';
 import { validateAdapter } from '../adapters/schema';
 import {
@@ -24,6 +25,7 @@ const BUNDLED_ADAPTERS: Record<string, unknown> = {
   'qwen-chat': qwen,
   'deepseek-chat': deepseek,
   chatgpt: chatgpt,
+  gemini: gemini,
   'universal-fallback': universal,
 };
 
