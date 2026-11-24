@@ -235,6 +235,48 @@ impl Manager {
         v
     }
 
+    /// Paginated MCP tool listing (`list_mcp_tools`) so `<workspace_context>`
+    /// never overflows chat character limits when many MCP servers are configured.
+    pub fn list_tools(&self, args: &Value) -> Result<ToolOk, ToolError> {
+        let server_filter = crate::tools::opt_str(args, "server")?
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty());
+        let query = crate::tools::opt_str(args, "query")?
+            .map(|q| q.trim().to_lowercase())
+            .filter(|q| !q.is_empty());
+        let page = crate::tools::opt_usize(args, "page")?.unwrap_or(1).max(1);
+        let page_size = crate::tools::opt_usize(args, "page_size")?
+            .unwrap_or(20)
+            .clamp(1, 50);
+        let include_schema = args
+            .get("include_schema")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        let mut entries: Vec<(String, String, String, Value)> = Vec::new();
+        for c in &self.clients {
+            let server = c.name().to_string();
+            if let Some(ref sf) = server_filter {
+                if server.to_lowercase() != *sf {
+                    continue;
+                }
+            }
+            for t in c.tools() {
+                let fq = format!("mcp__{server}__{}", t.name);
+                if let Some(ref q) = query {
+                    if !fq.to_lowercase().contains(q)
+                        && !t.description.to_lowercase().contains(q)
+                    {
+                        continue;
+                    }
+                }
+                entries.push((server.clone(), fq, t.description.clone(), t.input_schema.clone()));
+            }
+        }
+        entries.sort_by(|a, b| a.1.cmp(&b.1));
+        format_mcp_tool_page(&entries, page, page_size, include_schema, server_filter.as_deref(), query.as_deref())
+    }
+
     pub async fn call_tool(
         &self,
         server: &str,
@@ -253,6 +295,66 @@ impl Manager {
             })?;
         client.call_tool(tool, args).await
     }
+}
+
+fn format_mcp_tool_page(
+    entries: &[(String, String, String, Value)],
+    page: usize,
+    page_size: usize,
+    include_schema: bool,
+    server: Option<&str>,
+    query: Option<&str>,
+) -> Result<ToolOk, ToolError> {
+    let total = entries.len();
+    if total == 0 {
+        let msg = match (server, query) {
+            (Some(s), Some(q)) => format!("No MCP tools matched server '{s}' and query '{q}'."),
+            (Some(s), None) => format!("No MCP tools available for server '{s}'."),
+            (None, Some(q)) => format!("No MCP tools matched query '{q}'."),
+            (None, None) => "No MCP tools available.".to_string(),
+        };
+        return Ok(ToolOk::ok(msg));
+    }
+    let total_pages = total.div_ceil(page_size);
+    if page > total_pages {
+        return Err(ToolError::new(
+            "INVALID_ARGS",
+            format!("page {page} out of range 1..={total_pages} ({total} matching MCP tools)"),
+        ));
+    }
+    let start = (page - 1) * page_size;
+    let end = (start + page_size).min(total);
+    let mut out = format!(
+        "MCP Tools (page {page}/{total_pages}, showing {}-{end} of {total}):
+",
+        start + 1
+    );
+    for (_, fq, desc, schema) in &entries[start..end] {
+        if include_schema {
+            let compact = serde_json::to_string(schema).unwrap_or_else(|_| "{}".into());
+            out.push_str(&format!("- {fq}: {desc} | schema: {compact}
+"));
+        } else {
+            out.push_str(&format!("- {fq}: {desc}
+"));
+        }
+    }
+    if page < total_pages {
+        let next = page + 1;
+        let mut next_args = serde_json::Map::new();
+        next_args.insert("page".into(), Value::from(next));
+        next_args.insert("page_size".into(), Value::from(page_size));
+        if let Some(s) = server {
+            next_args.insert("server".into(), Value::from(s));
+        }
+        if let Some(q) = query {
+            next_args.insert("query".into(), Value::from(q));
+        }
+        let next_json = Value::Object(next_args).to_string();
+        out.push_str(&format!("
+Call `list_mcp_tools` with {next_json} for the next page."));
+    }
+    Ok(ToolOk::ok(out))
 }
 
 fn extract_stdio_servers(map: &serde_json::Map<String, Value>, out: &mut BTreeMap<String, McpServerDef>) {
@@ -438,5 +540,28 @@ mod tests {
         assert!(m.is_empty());
         assert!(m.statuses().is_empty());
         assert!(m.tool_names().is_empty());
+    }
+
+    #[test]
+    fn formats_paginated_mcp_tools() {
+        let entries: Vec<(String, String, String, Value)> = (1..=5)
+            .map(|i| {
+                (
+                    "srv".into(),
+                    format!("mcp__srv__tool_{i:02}"),
+                    format!("desc {i}"),
+                    serde_json::json!({"type": "object"}),
+                )
+            })
+            .collect();
+        let p1 = format_mcp_tool_page(&entries, 1, 2, true, Some("srv"), None).unwrap();
+        assert!(p1.text.contains("page 1/3"));
+        assert!(p1.text.contains("mcp__srv__tool_01"));
+        assert!(p1.text.contains("schema:"));
+        assert!(!p1.text.contains("mcp__srv__tool_03"));
+        assert!(p1.text.contains(r#""page":2"#));
+
+        let oob = format_mcp_tool_page(&entries, 9, 2, false, None, None).unwrap_err();
+        assert_eq!(oob.code, "INVALID_ARGS");
     }
 }

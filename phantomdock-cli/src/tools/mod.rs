@@ -189,6 +189,7 @@ impl Registry {
             "list_dir" => fs::list_dir(args, ctx),
             "search_files" => fs::search_files(args, ctx),
             "list_skills" => crate::skills::loader::list_skills(args, ctx),
+            "list_mcp_tools" => ctx.mcp.list_tools(args),
             "activate_skill" => crate::skills::loader::activate(args, ctx),
             "read_skill_resource" => crate::skills::loader::read_resource(args, ctx),
             "run_shell" => {
@@ -282,6 +283,12 @@ pub fn builtin_tool_infos(shell_enabled: bool) -> Vec<ToolInfo> {
             readonly: true,
             description: "Read a bundled skill resource (scripts/, references/, assets/).".into(),
         },
+        ToolInfo {
+            name: "list_mcp_tools".into(),
+            category: ToolCategory::Mcp,
+            readonly: true,
+            description: "List MCP tools and input schemas with pagination (server, page, page_size, query).".into(),
+        },
     ];
     if shell_enabled {
         v.push(ToolInfo {
@@ -359,6 +366,7 @@ pub fn build_workspace_context(
         r#"list_skills: {"page?":"number","page_size?":"number","query?":"string"}"#,
         r#"activate_skill: {"name":"string","part?":"number","mode?":"upload|inline"}"#,
         r#"read_skill_resource: {"skill_name":"string","resource_path":"string","start_line?":"number","end_line?":"number"}"#,
+        r#"list_mcp_tools: {"server?":"string","page?":"number","page_size?":"number","query?":"string","include_schema?":"boolean"}"#,
     ] {
         s.push_str(&format!("{n}. {line}\n"));
         n += 1;
@@ -369,11 +377,25 @@ pub fn build_workspace_context(
         ));
         n += 1;
     }
-    for (name, schema) in mcp.tool_schemas() {
-        let compact = serde_json::to_string(&schema).unwrap_or_else(|_| "{}".into());
-        s.push_str(&format!("{n}. {name}: {compact}\n"));
-        n += 1;
+    let mcp_statuses = mcp.statuses();
+    let total_mcp_tools: usize = mcp_statuses.iter().map(|st| st.tool_count).sum();
+    s.push_str(&format!(
+        "\n<mcp_servers count=\"{}\" tools=\"{total_mcp_tools}\">\n",
+        mcp_statuses.len()
+    ));
+    if mcp_statuses.is_empty() {
+        s.push_str("- (none configured)\n");
+    } else {
+        let summary = mcp_statuses
+            .iter()
+            .map(|st| format!("{} ({} tools, {})", st.name, st.tool_count, st.status))
+            .collect::<Vec<_>>()
+            .join(", ");
+        s.push_str(&format!(
+            "Configured servers: {summary}. MCP tool schemas are omitted from manifest to stay within chat character limits. Call `list_mcp_tools` with pagination (`server`, `page`, `page_size`, `query`) to inspect tools and schemas.\n"
+        ));
     }
+    s.push_str("</mcp_servers>\n");
     let skill_count = skills.skills.len();
     s.push_str(&format!("\n<available_skills count=\"{skill_count}\">\n"));
     if skill_count == 0 {
@@ -411,6 +433,8 @@ mod tests {
         assert!(xml.ends_with("</workspace_context>"));
 
         assert!(xml.contains("list_skills"));
+        assert!(xml.contains("list_mcp_tools"));
+        assert!(xml.contains("<mcp_servers count=\"0\" tools=\"0\">"));
 
         let populated = SkillsIndex {
             skills: vec![crate::skills::Skill {

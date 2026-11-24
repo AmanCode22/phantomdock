@@ -651,7 +651,7 @@ async function handleToolTurn(calls: ParsedCall[], assistantEl: HTMLElement | nu
       (ctx.settings.autoApproveReadOnly &&
         info !== null &&
         info.readonly &&
-        (info.category === 'fs' || info.category === 'skill'));
+        (info.category === 'fs' || info.category === 'skill' || call.name === 'list_mcp_tools'));
 
     if (autoApprove) {
       card.setRunning();
