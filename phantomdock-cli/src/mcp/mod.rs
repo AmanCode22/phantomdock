@@ -1,15 +1,42 @@
-//! MCP (Model Context Protocol) integration: `mcp.json` (Claude/Cursor
-//! compatible) parsing, health tracking, and fault-tolerant stdio clients.
+//! MCP (Model Context Protocol) integration: auto-discovers MCP configs from
+//! PhantomDock, Claude Code / Claude Desktop, Cursor, Windsurf, VS Code,
+//! Gemini CLI, Roo, Cline, and custom TOML `mcp_configs` / `mcp_dirs`.
 
 pub mod client;
 
-use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
+use crate::config::{expand_tilde, home_dir};
 use crate::tools::{ToolError, ToolOk};
 use client::{Client, McpServerDef};
+
+const WORKSPACE_MCP_FILES: &[&str] = &[
+    "mcp.json",
+    ".mcp.json",
+    ".phantomdock/mcp.json",
+    ".pdock/mcp.json",
+    ".claude/mcp.json",
+    ".cursor/mcp.json",
+    ".vscode/mcp.json",
+    ".windsurf/mcp.json",
+    ".gemini/settings.json",
+    ".roo/mcp.json",
+    ".cline/mcp.json",
+];
+
+const GLOBAL_MCP_FILES: &[&str] = &[
+    ".pdock/mcp.json",
+    ".claude.json",
+    ".claude/mcp.json",
+    ".config/Claude/claude_desktop_config.json",
+    "Library/Application Support/Claude/claude_desktop_config.json",
+    ".cursor/mcp.json",
+    ".codeium/windsurf/mcp_config.json",
+    ".gemini/settings.json",
+    ".config/phantomdock/mcp.json",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Health {
@@ -40,37 +67,127 @@ pub struct Manager {
     clients: Vec<std::sync::Arc<Client>>,
 }
 
-#[derive(Deserialize)]
-struct McpFile {
-    #[serde(default, alias = "mcpServers")]
-    mcp_servers: HashMap<String, McpServerDef>,
+/// Discover all existing MCP config files in precedence order (earlier wins):
+///   1. explicit `--mcp PATH`
+///   2. workspace-local agent MCP configs (`mcp.json`, `.mcp.json`, `.claude/mcp.json`, etc.)
+///   3. custom `mcp_configs` and `mcp_dirs` from `~/.pdock/config.toml`
+///   4. global agent MCP configs (`~/.pdock/mcp.json`, `~/.claude.json`, Claude Desktop, Cursor, Windsurf, Gemini)
+pub fn discover_config_paths(
+    cwd: &Path,
+    explicit: Option<&Path>,
+    extra_configs: &[PathBuf],
+    extra_dirs: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Some(p) = explicit {
+        candidates.push(resolve_path(cwd, p));
+    }
+
+    for rel in WORKSPACE_MCP_FILES {
+        candidates.push(cwd.join(rel));
+    }
+
+    for cfg_path in extra_configs {
+        candidates.push(resolve_path(cwd, cfg_path));
+    }
+
+    for dir in extra_dirs {
+        let resolved_dir = resolve_path(cwd, dir);
+        if let Ok(rd) = std::fs::read_dir(&resolved_dir) {
+            let mut files: Vec<PathBuf> = rd
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.is_file()
+                        && p.extension()
+                            .and_then(|e| e.to_str())
+                            .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+                })
+                .collect();
+            files.sort();
+            candidates.extend(files);
+        }
+    }
+
+    if let Some(home) = home_dir() {
+        for rel in GLOBAL_MCP_FILES {
+            candidates.push(home.join(rel));
+        }
+    }
+
+    // Windows Claude Desktop (%APPDATA%/Claude/claude_desktop_config.json)
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        candidates.push(
+            PathBuf::from(appdata)
+                .join("Claude")
+                .join("claude_desktop_config.json"),
+        );
+    }
+
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut out: Vec<PathBuf> = Vec::new();
+    for p in candidates {
+        if !p.is_file() {
+            continue;
+        }
+        let canon = p.canonicalize().unwrap_or(p);
+        if seen.insert(canon.clone()) {
+            out.push(canon);
+        }
+    }
+    out
+}
+
+fn resolve_path(cwd: &Path, path: &Path) -> PathBuf {
+    let expanded = expand_tilde(path);
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        cwd.join(expanded)
+    }
 }
 
 impl Manager {
-    /// Parse mcp.json (if present) and start all stdio servers.
+    /// Parse a single mcp.json (if present) and start all stdio servers.
     pub async fn start(path: Option<&Path>) -> Manager {
         let Some(path) = path else {
             return Manager::empty();
         };
-        let Ok(raw) = std::fs::read_to_string(path) else {
-            eprintln!("[pdock] mcp config not readable: {}", path.display());
+        Self::start_multi(&[path.to_path_buf()], None).await
+    }
+
+    /// Parse and merge multiple MCP config files (earlier files win on name collisions)
+    /// and start all discovered stdio servers.
+    pub async fn start_multi(paths: &[PathBuf], cwd: Option<&Path>) -> Manager {
+        if paths.is_empty() {
             return Manager::empty();
-        };
-        match parse_mcp_config(&raw) {
-            Ok(defs) => {
-                let mut clients = Vec::new();
-                for (name, def) in defs {
-                    let client = std::sync::Arc::new(Client::new(name, def));
-                    client.spawn_supervisor();
-                    clients.push(client);
+        }
+        let mut merged: BTreeMap<String, McpServerDef> = BTreeMap::new();
+        for path in paths {
+            let Ok(raw) = std::fs::read_to_string(path) else {
+                eprintln!("[pdock] mcp config not readable: {}", path.display());
+                continue;
+            };
+            match parse_mcp_config_for_cwd(&raw, cwd) {
+                Ok(defs) => {
+                    for (name, def) in defs {
+                        merged.entry(name).or_insert(def);
+                    }
                 }
-                Manager { clients }
-            }
-            Err(e) => {
-                eprintln!("[pdock] failed to parse {}: {e}", path.display());
-                Manager::empty()
+                Err(e) => {
+                    eprintln!("[pdock] skipping {}: {e}", path.display());
+                }
             }
         }
+
+        let mut clients = Vec::new();
+        for (name, def) in merged {
+            let client = std::sync::Arc::new(Client::new(name, def));
+            client.spawn_supervisor();
+            clients.push(client);
+        }
+        Manager { clients }
     }
 
     pub fn empty() -> Manager {
@@ -138,29 +255,95 @@ impl Manager {
     }
 }
 
-fn parse_mcp_config(raw: &str) -> Result<Vec<(String, McpServerDef)>, String> {
-    // Primary shape: {"mcpServers": {...}} (Claude/Cursor compatible).
-    if let Ok(file) = serde_json::from_str::<McpFile>(raw) {
-        if !file.mcp_servers.is_empty() {
-            let mut v: Vec<(String, McpServerDef)> = file.mcp_servers.into_iter().collect();
-            v.sort_by(|a, b| a.0.cmp(&b.0));
-            return Ok(v);
+fn extract_stdio_servers(map: &serde_json::Map<String, Value>, out: &mut BTreeMap<String, McpServerDef>) {
+    for (name, val) in map {
+        if out.contains_key(name) {
+            continue;
+        }
+        let Some(obj) = val.as_object() else {
+            continue;
+        };
+        if obj.get("disabled").and_then(|d| d.as_bool()) == Some(true) {
+            continue;
+        }
+        // Only spawn stdio servers (skip remote HTTP/SSE configs without `command`).
+        let Some(cmd) = obj.get("command").and_then(|c| c.as_str()) else {
+            continue;
+        };
+        if cmd.trim().is_empty() {
+            continue;
+        }
+        if let Ok(def) = serde_json::from_value::<McpServerDef>(val.clone()) {
+            out.insert(name.clone(), def);
         }
     }
-    // Fallback shape: top-level {"name": {...}} map.
-    match serde_json::from_str::<HashMap<String, McpServerDef>>(raw) {
+}
+
+/// Parse MCP server definitions from Claude/Cursor/VS Code/Gemini/PhantomDock JSON.
+/// Supports:
+/// - `{"mcpServers": {...}}` (Claude Desktop, Claude Code, Cursor, Windsurf, Gemini, PhantomDock)
+/// - `{"servers": {...}}` (VS Code `.vscode/mcp.json`)
+/// - `{"projects": {"<cwd>": {"mcpServers": {...}}}}` (Claude Code `~/.claude.json`)
+/// - flat `{"server-name": {"command": ...}}`
+pub fn parse_mcp_config_for_cwd(
+    raw: &str,
+    cwd: Option<&Path>,
+) -> Result<Vec<(String, McpServerDef)>, String> {
+    let root: Value = serde_json::from_str(raw).map_err(|e| format!("invalid mcp json: {e}"))?;
+    let Some(obj) = root.as_object() else {
+        return Err("invalid mcp json: root must be an object".to_string());
+    };
+
+    let mut out: BTreeMap<String, McpServerDef> = BTreeMap::new();
+    let mut found_container = false;
+
+    // 1. Claude Code per-project servers inside `~/.claude.json` (highest priority within file).
+    if let (Some(cwd_path), Some(projects)) = (cwd, obj.get("projects").and_then(|p| p.as_object()))
+    {
+        found_container = true;
+        let cwd_str = cwd_path.to_string_lossy();
+        if let Some(proj_servers) = projects
+            .get(cwd_str.as_ref())
+            .and_then(|p| p.get("mcpServers"))
+            .and_then(|s| s.as_object())
+        {
+            extract_stdio_servers(proj_servers, &mut out);
+        }
+    }
+
+    // 2. Standard `mcpServers` / `mcp_servers` / `servers` containers.
+    for key in ["mcpServers", "mcp_servers", "servers"] {
+        if let Some(map) = obj.get(key).and_then(|v| v.as_object()) {
+            found_container = true;
+            extract_stdio_servers(map, &mut out);
+        }
+    }
+
+    if found_container {
+        return Ok(out.into_iter().collect());
+    }
+
+    // 3. Fallback shape: flat top-level `{"name": {"command": ...}}` map.
+    match serde_json::from_value::<HashMap<String, McpServerDef>>(root) {
         Ok(map) => {
             let mut v: Vec<(String, McpServerDef)> = map.into_iter().collect();
             v.sort_by(|a, b| a.0.cmp(&b.0));
             Ok(v)
         }
-        Err(e) => Err(format!("invalid mcp.json: {e}")),
+        Err(_) => Ok(Vec::new()),
     }
+}
+
+#[cfg(test)]
+fn parse_mcp_config(raw: &str) -> Result<Vec<(String, McpServerDef)>, String> {
+    parse_mcp_config_for_cwd(raw, None)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn parses_claude_style_config() {
@@ -185,6 +368,54 @@ mod tests {
             defs[1].1.env.get("GITHUB_TOKEN").map(|s| s.as_str()),
             Some("x")
         );
+    }
+
+    #[test]
+    fn parses_claude_json_with_projects_and_skips_remote_or_disabled() {
+        let raw = r#"{
+            "theme": "dark",
+            "mcpServers": {
+                "global-fs": {"command": "npx", "args": ["fs"]},
+                "remote-sse": {"url": "https://example.com/sse"},
+                "off": {"command": "node", "disabled": true}
+            },
+            "projects": {
+                "/repo/demo": {
+                    "mcpServers": {
+                        "proj-db": {"command": "uvx", "args": ["mcp-sqlite"]}
+                    }
+                }
+            }
+        }"#;
+        let defs = parse_mcp_config_for_cwd(raw, Some(Path::new("/repo/demo"))).unwrap();
+        let names: Vec<&str> = defs.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["global-fs", "proj-db"]);
+    }
+
+    #[test]
+    fn parses_vscode_servers_key() {
+        let raw = r#"{"servers": {"git": {"command": "uvx", "args": ["mcp-server-git"]}}}"#;
+        let defs = parse_mcp_config(raw).unwrap();
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].0, "git");
+    }
+
+    #[test]
+    fn discovers_workspace_and_custom_mcp_dirs() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join(".mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
+        let custom_dir = tmp.path().join("extra-mcps");
+        fs::create_dir_all(&custom_dir).unwrap();
+        fs::write(custom_dir.join("tools.json"), r#"{"mcpServers":{}}"#).unwrap();
+
+        let found = discover_config_paths(
+            tmp.path(),
+            None,
+            &[],
+            std::slice::from_ref(&custom_dir),
+        );
+        assert!(found.iter().any(|p| p.ends_with(".mcp.json")));
+        assert!(found.iter().any(|p| p.ends_with("tools.json")));
     }
 
     #[test]

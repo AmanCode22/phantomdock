@@ -1,16 +1,45 @@
 //! Agent Skills (`SKILL.md`) discovery with workspace-over-global precedence.
 //!
-//! Scan order (first occurrence of a skill name wins):
-//!   1. `./.phantomdock/skills/<name>/SKILL.md`
-//!   2. `./.agents/skills/<name>/SKILL.md`
-//!   3. `~/.config/phantomdock/skills/<name>/SKILL.md`
-//!   4. custom `skill_dirs` from `phantomdock.toml` / `--skills-dir`
+//! Automatically scans PhantomDock, Claude Code, Cursor, Codex, Windsurf,
+//! Gemini CLI, OpenCode, Roo, Cline, and `.agents` skill directories (both
+//! workspace-local and global under `~/`), plus custom `skill_dirs` configured
+//! in `~/.pdock/config.toml` or `--skills-dir`.
 
 pub mod loader;
 pub mod splitter;
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use crate::config::{expand_tilde, home_dir};
+
+const WORKSPACE_SKILL_DIRS: &[&str] = &[
+    ".phantomdock/skills",
+    ".pdock/skills",
+    ".claude/skills",
+    ".agents/skills",
+    ".cursor/skills",
+    ".codex/skills",
+    ".windsurf/skills",
+    ".gemini/skills",
+    ".opencode/skills",
+    ".roo/skills",
+    ".cline/skills",
+];
+
+const GLOBAL_SKILL_DIRS: &[&str] = &[
+    ".pdock/skills",
+    ".config/phantomdock/skills",
+    ".claude/skills",
+    ".agents/skills",
+    ".cursor/skills",
+    ".codex/skills",
+    ".windsurf/skills",
+    ".gemini/skills",
+    ".config/opencode/skills",
+    ".roo/skills",
+    ".cline/skills",
+];
 
 #[derive(Debug, Clone)]
 pub struct Skill {
@@ -42,22 +71,35 @@ pub fn discover(extra_dirs: &[PathBuf]) -> SkillsIndex {
 }
 
 /// Discovery with an explicit workspace root (testable without cwd games).
-pub fn discover_in(cwd: &std::path::Path, extra_dirs: &[PathBuf]) -> SkillsIndex {
-    let mut dirs: Vec<PathBuf> = vec![cwd.join(".phantomdock/skills"), cwd.join(".agents/skills")];
-    if let Some(home) = std::env::var_os("HOME") {
-        dirs.push(PathBuf::from(home).join(".config/phantomdock/skills"));
-    }
+pub fn discover_in(cwd: &Path, extra_dirs: &[PathBuf]) -> SkillsIndex {
+    let mut dirs: Vec<PathBuf> = WORKSPACE_SKILL_DIRS
+        .iter()
+        .map(|rel| cwd.join(rel))
+        .collect();
+
     for d in extra_dirs {
-        dirs.push(if d.is_absolute() {
-            d.clone()
+        let expanded = expand_tilde(d);
+        dirs.push(if expanded.is_absolute() {
+            expanded
         } else {
-            cwd.join(d)
+            cwd.join(expanded)
         });
     }
 
+    if let Some(home) = home_dir() {
+        for rel in GLOBAL_SKILL_DIRS {
+            dirs.push(home.join(rel));
+        }
+    }
+
+    let mut seen_dirs: HashSet<PathBuf> = HashSet::new();
     let mut by_name: BTreeMap<String, Skill> = BTreeMap::new();
     for d in dirs {
-        let Ok(read_dir) = std::fs::read_dir(&d) else {
+        let canon_dir = d.canonicalize().unwrap_or(d);
+        if !seen_dirs.insert(canon_dir.clone()) {
+            continue;
+        }
+        let Ok(read_dir) = std::fs::read_dir(&canon_dir) else {
             continue;
         };
         let mut subdirs: Vec<PathBuf> = read_dir
@@ -206,13 +248,21 @@ mod tests {
     }
 
     #[test]
-    fn discovery_finds_workspace_and_custom_dirs() {
+    fn discovery_finds_workspace_claude_agents_and_custom_dirs() {
         let tmp = TempDir::new().unwrap();
         let ws = tmp.path().join(".phantomdock/skills/grill-me");
         fs::create_dir_all(&ws).unwrap();
         fs::write(
             ws.join("SKILL.md"),
             "---\nname: grill-me\ndescription: workspace copy\n---\nbody",
+        )
+        .unwrap();
+
+        let claude = tmp.path().join(".claude/skills/code-review");
+        fs::create_dir_all(&claude).unwrap();
+        fs::write(
+            claude.join("SKILL.md"),
+            "---\nname: code-review\ndescription: claude skill\n---\nbody",
         )
         .unwrap();
 
@@ -225,6 +275,8 @@ mod tests {
 
         let grill = index.find("grill-me").expect("workspace skill found");
         assert_eq!(grill.description, "workspace copy");
+        let review = index.find("code-review").expect("claude skill found");
+        assert_eq!(review.description, "claude skill");
         let pdf = index.find("pdf-tools").expect("custom skill found");
         assert!(!pdf.description.is_empty());
         assert!(pdf.dir.starts_with(custom_root.canonicalize().unwrap()));

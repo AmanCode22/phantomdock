@@ -1,6 +1,7 @@
 # PhantomDock daemon configuration example.
-# Copy to ./phantomdock.toml (workspace) or ~/.config/phantomdock/config.toml (global).
-# Workspace file wins over the global one.
+# Copy to ./phantomdock.toml (workspace) or ~/.pdock/config.toml (global),
+# or manage directly with `pdock config --help`.
+# Workspace file wins over ~/.pdock/config.toml.
 
 # Max characters of tool output returned inline in chat. Larger outputs are
 # offloaded to .phantomdock/outputs/<call_id>.txt with a head/tail preview.
@@ -12,8 +13,16 @@ inline_skill_chunk_chars = 6000
 # Per-tool timeout for MCP stdio servers.
 mcp_tool_timeout_secs = 30
 
-# Extra skill directories (scanned after workspace and global dirs).
+# Extra skill directories (in addition to auto-discovered PhantomDock, Claude,
+# Cursor, Codex, Windsurf, Gemini, OpenCode, Roo, Cline, and .agents dirs).
 skill_dirs = []
+
+# Extra MCP JSON config file paths (in addition to auto-discovered Claude,
+# Cursor, Windsurf, VS Code, Gemini, Roo, Cline, and ~/.pdock/mcp.json files).
+mcp_configs = []
+
+# Extra directories containing MCP *.json config files.
+mcp_dirs = []
 
 [sandbox]
 # Sensitive-file deny-list: reading, writing, listing, and searching are all
