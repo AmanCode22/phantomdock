@@ -126,7 +126,7 @@ export type ServerMessage =
 
 export type ClientMessage = ToolCallRequest | ManifestRequest | { type: 'keepalive_ack' };
 
-// ---- Extension settings (chrome.storage.session, per-popup editable) ----
+// ---- Extension settings (persisted in chrome.storage.local, editable in popup) ----
 
 export interface GuardSettings {
   submitDelayRangeMs: [number, number];
@@ -167,10 +167,32 @@ export interface TabBinding {
   token: string;
 }
 
+export interface DaemonSnapshot {
+  info: HandshakeInfo | null;
+  tools: ToolInfo[];
+  skills: SkillSummary[];
+  connected: boolean;
+}
+
+export interface DiagnosticReport {
+  adapterId: string;
+  adapterName: string;
+  host: string;
+  bound: boolean;
+  inputFound: boolean;
+  sendButtonFound: boolean;
+  assistantCount: number;
+  userCount: number;
+  streaming: boolean;
+  challengeVisible: boolean;
+  rateLimitVisible: boolean;
+}
+
 export type BgRequest =
   | { t: 'scan' }
   | { t: 'bind'; tabId: number; port: number; token: string }
   | { t: 'unbind'; tabId: number }
+  | { t: 'reconnect'; tabId: number }
   | { t: 'getStatus'; tabId: number }
   | { t: 'getSettings' }
   | { t: 'setSettings'; patch: Partial<GuardSettings> }
@@ -180,14 +202,17 @@ export type BgRequest =
   | { t: 'resetAdapter'; id: string }
   | { t: 'attachSkill'; tabId: number; name: string }
   | { t: 'injectHere'; tabId: number }
-  | { t: 'stopAutomation'; tabId: number; stopped: boolean };
+  | { t: 'stopAutomation'; tabId: number; stopped: boolean }
+  | { t: 'diagnoseTab'; tabId: number };
 
 export interface BgStatusResponse {
+  ok: boolean;
   binding: TabBinding | null;
   daemonInfo: HandshakeInfo | null;
   skills: SkillSummary[];
   tools: ToolInfo[];
   connected: boolean;
+  contentActive: boolean;
 }
 
 export interface AdapterListResponse {
@@ -198,7 +223,9 @@ export interface AdapterListResponse {
 // ---- misc helpers ----
 
 export function randomInt(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+  const lo = Math.min(min, max);
+  const hi = Math.max(min, max);
+  return Math.floor(Math.random() * (hi - lo + 1)) + lo;
 }
 
 export function randomFromRange([min, max]: [number, number]): number {
@@ -210,8 +237,8 @@ export function clickPointInRect(
   rect: { x: number; y: number; width: number; height: number },
   fraction = 0.6,
 ): { clientX: number; clientY: number } {
-  const fx = rect.width * (1 - fraction) / 2;
-  const fy = rect.height * (1 - fraction) / 2;
+  const fx = (rect.width * (1 - fraction)) / 2;
+  const fy = (rect.height * (1 - fraction)) / 2;
   return {
     clientX: randomInt(Math.round(rect.x + fx), Math.round(rect.x + rect.width - fx)),
     clientY: randomInt(Math.round(rect.y + fy), Math.round(rect.y + rect.height - fy)),

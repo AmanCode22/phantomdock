@@ -8,7 +8,9 @@ import chatgpt from '../adapters/chatgpt.json';
 import universal from '../adapters/universal.json';
 import { validateAdapter } from '../adapters/schema';
 import {
+  nextRequestId,
   type BgRequest,
+  type DiagnosticReport,
   type GuardSettings,
   type HandshakeInfo,
   type SkillSummary,
@@ -28,13 +30,39 @@ const BUNDLED_ADAPTERS: Record<string, unknown> = {
 // ---- daemon connection pool (one WS per port) ----
 
 const connections = new Map<number, DaemonConnection>();
+const contentPorts = new Map<number, chrome.runtime.Port>();
+const pendingDiagnostics = new Map<
+  string,
+  { resolve: (r: DiagnosticReport | null) => void; timer: ReturnType<typeof setTimeout> }
+>();
+
+function sendToTab(tabId: number, msg: unknown): boolean {
+  const port = contentPorts.get(tabId);
+  if (!port) return false;
+  try {
+    port.postMessage(msg);
+    return true;
+  } catch {
+    contentPorts.delete(tabId);
+    return false;
+  }
+}
 
 function broadcastToContent(msg: unknown): void {
-  for (const port of contentPorts.values()) {
+  for (const [tabId, port] of contentPorts.entries()) {
     try {
       port.postMessage(msg);
     } catch {
-      // port closed — cleaned up in onDisconnect
+      contentPorts.delete(tabId);
+    }
+  }
+}
+
+async function notifyBoundTabsForPort(portNum: number, msg: unknown): Promise<void> {
+  const bindings = await store.getBindings();
+  for (const [tabIdStr, binding] of Object.entries(bindings)) {
+    if (binding.port === portNum) {
+      sendToTab(Number(tabIdStr), msg);
     }
   }
 }
@@ -47,16 +75,32 @@ async function ensureConnection(port: number, token: string): Promise<DaemonConn
   const existing = connections.get(port);
   if (existing && existing.token === token) {
     if (!existing.connected) {
-      await existing.connect().catch(() => undefined);
+      await existing.connect();
     }
     return existing;
   }
   existing?.close();
   const conn = new DaemonConnection(port, token, {
-    onDisconnect: (p) => broadcastToContent({ t: 'daemonDisconnected', port: p }),
+    onHello: (p, _hello) => {
+      void notifyBoundTabsForPort(p, {
+        t: 'daemonConnected',
+        port: p,
+        daemon: conn.snapshot(),
+      });
+    },
+    onDisconnect: (p) => {
+      void notifyBoundTabsForPort(p, { t: 'daemonDisconnected', port: p });
+    },
   });
   connections.set(port, conn);
-  await conn.connect();
+  try {
+    await conn.connect();
+  } catch (e) {
+    if (connections.get(port) === conn) {
+      connections.delete(port);
+    }
+    throw e;
+  }
   return conn;
 }
 
@@ -71,8 +115,6 @@ async function maybeCloseConnection(port: number): Promise<void> {
 
 // ---- content script ports ----
 
-const contentPorts = new Map<number, chrome.runtime.Port>();
-
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'pdock-content') return;
   const tabId = port.sender?.tab?.id;
@@ -81,7 +123,11 @@ chrome.runtime.onConnect.addListener((port) => {
     return;
   }
   contentPorts.set(tabId, port);
-  port.onDisconnect.addListener(() => contentPorts.delete(tabId));
+  port.onDisconnect.addListener(() => {
+    if (contentPorts.get(tabId) === port) {
+      contentPorts.delete(tabId);
+    }
+  });
   port.onMessage.addListener((msg: Record<string, unknown>) => {
     void handleContentMessage(tabId, port, msg);
   });
@@ -96,17 +142,24 @@ async function handleContentMessage(
     try {
       port.postMessage(m);
     } catch {
-      /* closed */
+      if (contentPorts.get(tabId) === port) {
+        contentPorts.delete(tabId);
+      }
     }
   };
 
   try {
     switch (msg.t) {
+      case 'ping': {
+        send({ t: 'pong', ts: Date.now() });
+        break;
+      }
       case 'hello': {
-        const [binding, settings, trusted] = await Promise.all([
+        const [binding, settings, trusted, turnState] = await Promise.all([
           store.getBinding(tabId),
           store.getSettings(),
           store.getTrustedTools(tabId),
+          store.getTurnState(tabId),
         ]);
         if (binding) {
           const conn = await ensureConnection(binding.port, binding.token).catch(() => null);
@@ -115,17 +168,18 @@ async function handleContentMessage(
             binding,
             settings,
             trustedTools: trusted,
-            daemon: conn
-              ? {
-                  info: conn.info,
-                  tools: conn.tools,
-                  skills: conn.skills,
-                  connected: conn.connected,
-                }
-              : null,
+            turnState,
+            daemon: conn ? conn.snapshot() : null,
           });
         } else {
-          send({ t: 'init', binding: null, settings, trustedTools: trusted, daemon: null });
+          send({
+            t: 'init',
+            binding: null,
+            settings,
+            trustedTools: trusted,
+            turnState,
+            daemon: null,
+          });
         }
         break;
       }
@@ -154,7 +208,7 @@ async function handleContentMessage(
           return;
         }
         const conn = await ensureConnection(binding.port, binding.token).catch(() => null);
-        if (!conn) {
+        if (!conn || !conn.connected) {
           send({ t: 'manifestResult', id: msg.id, ok: false, error: 'Daemon not connected' });
           return;
         }
@@ -165,6 +219,8 @@ async function handleContentMessage(
       case 'turnSent': {
         const state = await store.getTurnState(tabId);
         state.consecutiveAutoTurns += 1;
+        state.backoffStreak = 0;
+        state.cooldownReason = null;
         const cutoff = Date.now() - 60 * 60 * 1000;
         state.hourlyTimestamps = [
           ...state.hourlyTimestamps.filter((ts) => ts >= cutoff),
@@ -189,9 +245,15 @@ async function handleContentMessage(
       }
       case 'setStopped': {
         const state = await store.getTurnState(tabId);
-        state.stopped = Boolean(msg.stopped);
+        const stopped = Boolean(msg.stopped);
+        state.stopped = stopped;
+        if (!stopped) {
+          state.cooldownUntil = 0;
+          state.backoffStreak = 0;
+          state.cooldownReason = null;
+        }
         await store.putTurnState(tabId, state);
-        void chrome.action.setBadgeText({ tabId, text: state.stopped ? 'STOP' : '' });
+        void chrome.action.setBadgeText({ tabId, text: stopped ? 'STOP' : '' });
         break;
       }
       case 'trustTool': {
@@ -203,13 +265,24 @@ async function handleContentMessage(
         send({ t: 'turnState', state });
         break;
       }
+      case 'diagnoseResult': {
+        const id = String(msg.id ?? '');
+        const entry = pendingDiagnostics.get(id);
+        if (entry) {
+          pendingDiagnostics.delete(id);
+          clearTimeout(entry.timer);
+          entry.resolve((msg.report as DiagnosticReport) ?? null);
+        }
+        break;
+      }
       default:
         break;
     }
   } catch (e) {
     if (msg && typeof msg.id === 'string') {
+      const replyType = msg.t === 'manifest' ? 'manifestResult' : 'toolResult';
       send({
-        t: 'toolResult',
+        t: replyType,
         id: msg.id,
         ok: false,
         error: e instanceof Error ? e.message : String(e),
@@ -217,6 +290,23 @@ async function handleContentMessage(
     }
   }
 }
+
+// ---- tab cleanup ----
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  contentPorts.delete(tabId);
+  void (async () => {
+    const binding = await store.getBinding(tabId);
+    await Promise.all([
+      store.clearBinding(tabId),
+      store.clearTurnState(tabId),
+      store.clearTrustedTools(tabId),
+    ]);
+    if (binding) {
+      await maybeCloseConnection(binding.port);
+    }
+  })();
+});
 
 // ---- popup requests (chrome.runtime.onMessage) ----
 
@@ -232,22 +322,22 @@ chrome.runtime.onMessage.addListener(
           }
           case 'bind': {
             await store.setBinding(msg.tabId, { port: msg.port, token: msg.token });
-            // Verify the token actually opens a WS before declaring success.
             try {
               const conn = await ensureConnection(msg.port, msg.token);
               if (!conn.connected) {
-                sendResponse({ ok: false, error: 'WebSocket failed to open' });
+                await store.clearBinding(msg.tabId);
+                sendResponse({ ok: false, error: 'WebSocket failed to complete handshake' });
                 return;
               }
-              sendResponse({
-                ok: true,
-                daemon: {
-                  info: conn.info,
-                  tools: conn.tools,
-                  skills: conn.skills,
-                  connected: true,
-                },
+              const daemon = conn.snapshot();
+              // Push live binding + tools + skills to the already-running content script!
+              sendToTab(msg.tabId, {
+                t: 'bindingUpdated',
+                binding: { port: msg.port, token: msg.token },
+                daemon,
               });
+              void chrome.action.setBadgeText({ tabId: msg.tabId, text: '' });
+              sendResponse({ ok: true, daemon });
             } catch (e) {
               await store.clearBinding(msg.tabId);
               sendResponse({
@@ -257,12 +347,35 @@ chrome.runtime.onMessage.addListener(
             }
             break;
           }
+          case 'reconnect': {
+            const binding = await store.getBinding(msg.tabId);
+            if (!binding) {
+              sendResponse({ ok: false, error: 'No binding saved for this tab' });
+              return;
+            }
+            try {
+              const conn = await ensureConnection(binding.port, binding.token);
+              const daemon = conn.snapshot();
+              sendToTab(msg.tabId, { t: 'bindingUpdated', binding, daemon });
+              sendResponse({ ok: true, daemon });
+            } catch (e) {
+              sendResponse({
+                ok: false,
+                error: e instanceof Error ? e.message : 'reconnect failed',
+              });
+            }
+            break;
+          }
           case 'unbind': {
             const binding = await store.getBinding(msg.tabId);
-            await store.clearBinding(msg.tabId);
+            await Promise.all([
+              store.clearBinding(msg.tabId),
+              store.clearTrustedTools(msg.tabId),
+            ]);
             if (binding) {
               await maybeCloseConnection(binding.port);
             }
+            sendToTab(msg.tabId, { t: 'bindingUpdated', binding: null, daemon: null });
             void chrome.action.setBadgeText({ tabId: msg.tabId, text: '' });
             sendResponse({ ok: true });
             break;
@@ -274,13 +387,25 @@ chrome.runtime.onMessage.addListener(
             let skills: SkillSummary[] = [];
             let connected = false;
             if (binding) {
-              const conn = connections.get(binding.port) ?? null;
+              let conn = connections.get(binding.port) ?? null;
+              // Lazily reconnect if the MV3 service worker restarted while bound.
+              if (!conn || !conn.connected) {
+                conn = await ensureConnection(binding.port, binding.token).catch(() => null);
+              }
               daemon = conn?.info ?? null;
               tools = conn?.tools ?? [];
               skills = conn?.skills ?? [];
               connected = conn?.connected ?? false;
             }
-            sendResponse({ ok: true, binding, daemonInfo: daemon, tools, skills, connected });
+            sendResponse({
+              ok: true,
+              binding,
+              daemonInfo: daemon,
+              tools,
+              skills,
+              connected,
+              contentActive: contentPorts.has(msg.tabId),
+            });
             break;
           }
           case 'getSettings': {
@@ -306,35 +431,39 @@ chrome.runtime.onMessage.addListener(
               return;
             }
             await store.putUserAdapter(res.def.id, res.def);
+            broadcastToContent({ t: 'adaptersChanged' });
             sendResponse({ ok: true });
             break;
           }
           case 'deleteAdapter':
           case 'resetAdapter': {
             await store.deleteUserAdapter(msg.id);
+            broadcastToContent({ t: 'adaptersChanged' });
             sendResponse({ ok: true });
             break;
           }
           case 'attachSkill': {
-            const p = contentPorts.get(msg.tabId);
-            if (!p) {
-              sendResponse({ ok: false, error: 'No content script on this tab' });
+            if (!sendToTab(msg.tabId, { t: 'attachSkill', name: msg.name })) {
+              sendResponse({ ok: false, error: 'No content script active on this tab' });
               return;
             }
-            p.postMessage({ t: 'attachSkill', name: msg.name });
             sendResponse({ ok: true });
             break;
           }
           case 'stopAutomation': {
             const state = await store.getTurnState(msg.tabId);
             state.stopped = msg.stopped;
+            if (!msg.stopped) {
+              state.cooldownUntil = 0;
+              state.backoffStreak = 0;
+              state.cooldownReason = null;
+            }
             await store.putTurnState(msg.tabId, state);
             void chrome.action.setBadgeText({
               tabId: msg.tabId,
               text: msg.stopped ? 'STOP' : '',
             });
-            const p = contentPorts.get(msg.tabId);
-            p?.postMessage({ t: 'stopChanged', stopped: msg.stopped });
+            sendToTab(msg.tabId, { t: 'stopChanged', stopped: msg.stopped });
             sendResponse({ ok: true });
             break;
           }
@@ -350,6 +479,32 @@ chrome.runtime.onMessage.addListener(
                 ok: false,
                 error: e instanceof Error ? e.message : 'injection failed',
               });
+            }
+            break;
+          }
+          case 'diagnoseTab': {
+            const port = contentPorts.get(msg.tabId);
+            if (!port) {
+              sendResponse({ ok: false, error: 'Content script not active on this tab' });
+              return;
+            }
+            const id = nextRequestId('diag');
+            const report = await new Promise<DiagnosticReport | null>((resolve) => {
+              const timer = setTimeout(() => {
+                pendingDiagnostics.delete(id);
+                resolve(null);
+              }, 3000);
+              pendingDiagnostics.set(id, { resolve, timer });
+              if (!sendToTab(msg.tabId, { t: 'diagnose', id })) {
+                clearTimeout(timer);
+                pendingDiagnostics.delete(id);
+                resolve(null);
+              }
+            });
+            if (!report) {
+              sendResponse({ ok: false, error: 'Diagnostics timed out' });
+            } else {
+              sendResponse({ ok: true, report });
             }
             break;
           }

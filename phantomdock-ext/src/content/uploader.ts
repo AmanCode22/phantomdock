@@ -3,7 +3,7 @@
 
 import { sleep } from '../shared/protocol';
 import type { AdapterDef } from '../adapters/schema';
-import type { InputEl } from './injector';
+import { isElementVisible, type InputEl } from './injector';
 
 export type AttachOutcome = { mode: 'upload' } | { mode: 'inline'; reason: string };
 
@@ -11,9 +11,14 @@ export function buildSkillFile(filename: string, content: string): File {
   return new File([content], filename, { type: 'text/markdown' });
 }
 
-/** Try the `input` strategy: set files on a (possibly detached) file input. */
+/** Try the `input` strategy: set files on a (possibly hidden) file input. */
 async function tryInput(adapter: AdapterDef, file: File): Promise<boolean> {
-  const input = document.querySelector<HTMLInputElement>(adapter.fileUpload.fileInputSelector);
+  let input: HTMLInputElement | null = null;
+  try {
+    input = document.querySelector<HTMLInputElement>(adapter.fileUpload.fileInputSelector);
+  } catch {
+    return false;
+  }
   if (!input) return false;
   const dt = new DataTransfer();
   dt.items.add(file);
@@ -36,7 +41,12 @@ async function tryPaste(inputEl: InputEl | null, file: File): Promise<boolean> {
 
 /** Try the `drop` strategy: dragenter -> dragover -> drop on the drop zone. */
 async function tryDrop(adapter: AdapterDef, file: File): Promise<boolean> {
-  const zone = document.querySelector<HTMLElement>(adapter.fileUpload.dropZoneSelector);
+  let zone: HTMLElement | null = null;
+  try {
+    zone = document.querySelector<HTMLElement>(adapter.fileUpload.dropZoneSelector);
+  } catch {
+    return false;
+  }
   if (!zone) return false;
   const dt = new DataTransfer();
   dt.items.add(file);
@@ -54,15 +64,20 @@ async function tryDrop(adapter: AdapterDef, file: File): Promise<boolean> {
   return true;
 }
 
-/** Wait for an attachment chip / upload completion within uploadTimeoutMs. */
+/** Wait for a visible attachment chip & no visible spinner within uploadTimeoutMs. */
 async function waitForAttachment(adapter: AdapterDef): Promise<boolean> {
   const deadline = Date.now() + adapter.fileUpload.uploadTimeoutMs;
   while (Date.now() < deadline) {
-    const chip = document.querySelector(adapter.fileUpload.attachmentChipSelector);
-    if (chip) {
-      // Also give spinners a moment to settle (upload completes server-side).
-      const spinner = document.querySelector(adapter.fileUpload.uploadingSpinnerSelector);
-      if (!spinner) return true;
+    try {
+      const chips = [...document.querySelectorAll(adapter.fileUpload.attachmentChipSelector)];
+      const visibleChip = chips.some((c) => isElementVisible(c));
+      if (visibleChip) {
+        const spinners = [...document.querySelectorAll(adapter.fileUpload.uploadingSpinnerSelector)];
+        const stillUploading = spinners.some((s) => isElementVisible(s));
+        if (!stillUploading) return true;
+      }
+    } catch {
+      return false;
     }
     await sleep(300);
   }
@@ -98,7 +113,6 @@ export async function attachSkillFile(
     if (await waitForAttachment(adapter)) {
       return { mode: 'upload' };
     }
-    // Remove a possibly half-attached chip before trying the next strategy.
     detachPendingAttachment(adapter);
   }
 
@@ -110,10 +124,14 @@ export async function attachSkillFile(
 
 /** Best-effort removal of a dangling attachment chip via its close button. */
 function detachPendingAttachment(adapter: AdapterDef): void {
-  const chip = document.querySelector<HTMLElement>(adapter.fileUpload.attachmentChipSelector);
-  if (!chip) return;
-  const close = chip.querySelector<HTMLElement>(
-    "button, [class*='close'], [class*='remove'], [role='button']",
-  );
-  close?.click();
+  try {
+    const chip = document.querySelector<HTMLElement>(adapter.fileUpload.attachmentChipSelector);
+    if (!chip) return;
+    const close = chip.querySelector<HTMLElement>(
+      "button, [class*='close'], [class*='remove'], [role='button']",
+    );
+    close?.click();
+  } catch {
+    /* ignore */
+  }
 }

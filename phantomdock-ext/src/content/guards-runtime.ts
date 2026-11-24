@@ -4,6 +4,7 @@
 
 import type { AdapterDef } from '../adapters/schema';
 import type { GuardSettings } from '../shared/protocol';
+import { isElementVisible } from './injector';
 import {
   checkGuards,
   clearBackoffStreak,
@@ -38,12 +39,11 @@ const CHALLENGE_EXTRA_SELECTORS = [
   "iframe[src*='arkoselabs']",
   "iframe[src*='funcaptcha']",
   "iframe[src*='hcaptcha']",
-  "[class*='captcha']",
 ];
 
 export class GuardController {
   state: GuardRuntimeState;
-  private timers: number[] = [];
+  private timers: ReturnType<typeof setInterval>[] = [];
   private watchers: MutationObserver[] = [];
   private lastVerdict: GuardVerdict = { ok: true };
 
@@ -51,24 +51,17 @@ export class GuardController {
     private adapter: AdapterDef,
     private settings: GuardSettings,
     private ui: GuardUi,
-    private persist: (fn: (s: GuardRuntimeState) => void) => void,
+    private onCooldownTrip: (until: number, streak: number, reason: string) => void,
     state?: GuardRuntimeState,
   ) {
     this.state = state ?? initialGuardState();
   }
 
   start(): void {
-    // Active-tab gate.
     document.addEventListener('visibilitychange', this.onVisibility);
-    // Challenge + rate-limit watchers (interval sweep; MutationObserver alone
-    // can miss iframes injected deep in portals).
-    const sweep = window.setInterval(() => this.sweepBanners(), 1500);
+    const sweep = setInterval(() => this.sweepBanners(), 2000);
     this.timers.push(sweep);
-    const bannerObserver = new MutationObserver(() => this.sweepBanners());
-    bannerObserver.observe(document.body, { childList: true, subtree: true });
-    this.watchers.push(bannerObserver);
-    // Cooldown countdown ticker.
-    const tick = window.setInterval(() => this.emit(), 1000);
+    const tick = setInterval(() => this.emit(), 1000);
     this.timers.push(tick);
   }
 
@@ -85,43 +78,79 @@ export class GuardController {
     this.emit();
   }
 
+  updateAdapter(adapter: AdapterDef): void {
+    this.adapter = adapter;
+    this.emit();
+  }
+
+  hydrateState(state: GuardRuntimeState): void {
+    this.state = state;
+    this.emit();
+  }
+
   private onVisibility = (): void => {
     this.emit();
   };
 
+  isChallengeVisible(): boolean {
+    if (!this.settings.challengeWatch) return false;
+    return (
+      this.detectVisible(this.adapter.selectors.challengeBanner, true) ||
+      CHALLENGE_EXTRA_SELECTORS.some((s) => this.detectVisible(s, true))
+    );
+  }
+
+  isRateLimitVisible(): boolean {
+    return this.detectVisible(this.adapter.selectors.rateLimitBanner, false);
+  }
+
   private sweepBanners(): void {
     const now = Date.now();
-    const challenge =
-      this.detect(this.adapter.selectors.challengeBanner) ||
-      CHALLENGE_EXTRA_SELECTORS.some((s) => this.detect(s));
-    const rateLimit = this.detect(this.adapter.selectors.rateLimitBanner);
+    const challenge = this.isChallengeVisible();
+    const rateLimit = this.isRateLimitVisible();
 
     if (challenge && this.state.cooldownUntil < now && !this.state.stopped) {
       const secs = tripCooldown(this.state, this.effectiveSettings(), now, 'CHALLENGE');
-      this.persist(() => undefined);
+      this.onCooldownTrip(
+        this.state.cooldownUntil,
+        this.state.backoffStreak,
+        this.state.cooldownReason ?? 'challenge breaker',
+      );
       this.ui.setBadge('CAPTCHA');
-      this.ui.onStateChange(this.summary());
-      console.warn(`[pdock] challenge detected — cooldown ${secs}s (COOLDOWN_PAUSED)`);
-    }
-    if (rateLimit && this.state.cooldownUntil < now && !this.state.stopped) {
+      console.warn(`[pdock] challenge detected — cooldown ${secs}s`);
+    } else if (rateLimit && this.state.cooldownUntil < now && !this.state.stopped) {
       const secs = tripCooldown(this.state, this.effectiveSettings(), now, 'RATE_LIMIT');
+      this.onCooldownTrip(
+        this.state.cooldownUntil,
+        this.state.backoffStreak,
+        this.state.cooldownReason ?? 'rate-limit backoff',
+      );
       this.ui.setBadge('COOL');
       console.warn(`[pdock] rate limit detected — backoff ${secs}s`);
     }
     this.emit();
   }
 
-  private detect(selector: string): boolean {
+  /**
+   * Only return true if a matching element is actually visible on screen
+   * (and has non-empty text unless it is an iframe). Prevents false positives
+   * from hidden toast containers or empty error slots.
+   */
+  private detectVisible(selector: string, allowEmptyIframe: boolean): boolean {
     try {
-      return Boolean(document.querySelector(selector));
+      const matches = document.querySelectorAll(selector);
+      for (const el of matches) {
+        if (!isElementVisible(el)) continue;
+        if (allowEmptyIframe && el.tagName === 'IFRAME') return true;
+        if ((el.textContent ?? '').trim().length > 0) return true;
+      }
+      return false;
     } catch {
       return false;
     }
   }
 
   private effectiveSettings(): GuardSettings {
-    // Adapter loop protection and global settings merge; the more conservative
-    // (smaller) budget wins.
     const s = { ...this.settings };
     s.maxConsecutiveAutoTurns = Math.min(
       s.maxConsecutiveAutoTurns,
@@ -144,8 +173,8 @@ export class GuardController {
       state: this.state,
       now,
       visible: document.visibilityState === 'visible',
-      challengeDetected: this.detect(this.adapter.selectors.challengeBanner),
-      rateLimitDetected: this.detect(this.adapter.selectors.rateLimitBanner),
+      challengeDetected: this.isChallengeVisible(),
+      rateLimitDetected: this.isRateLimitVisible(),
     });
     this.lastVerdict = verdict;
     this.emit();
@@ -159,13 +188,12 @@ export class GuardController {
   registerAutoSend(): void {
     registerAutoSend(this.state, Date.now());
     clearBackoffStreak(this.state);
-    this.persist(() => undefined);
+    this.lastVerdict = { ok: true };
     this.emit();
   }
 
   registerManualSend(): void {
     registerManualSend(this.state);
-    this.persist(() => undefined);
     this.emit();
   }
 
@@ -175,9 +203,9 @@ export class GuardController {
       this.ui.setBadge('STOP');
     } else {
       manualResume(this.state);
+      this.lastVerdict = { ok: true };
       this.ui.setBadge(null);
     }
-    this.persist(() => undefined);
     this.emit();
   }
 

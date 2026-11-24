@@ -1,7 +1,9 @@
-// PhantomDock content script orchestrator. Loads the matching site adapter,
-// connects to the background via runtime.Port (never touches localhost), and
-// drives the full turn lifecycle: stream detection -> batched approval cards ->
-// guard checks -> cascading skill upload -> human-paced submission.
+// PhantomDock content script orchestrator.
+// - Resilient PortClient with auto-reconnect across MV3 service-worker sleep
+// - Live binding/unbind & adapter hot-reload without page refresh
+// - Deterministic tool-call execution (single correlation path, zero ID mismatch)
+// - SPA thread-change reset + snapshot-before-submit so fast replies never drop
+// - Manual-send hooks for both Send button click and Enter key
 
 import type { AdapterDef } from '../adapters/schema';
 import { validateAdapter } from '../adapters/schema';
@@ -11,18 +13,28 @@ import chatgpt from '../adapters/chatgpt.json';
 import universal from '../adapters/universal.json';
 import {
   DEFAULT_SETTINGS,
+  nextRequestId,
+  randomFromRange,
+  sleep,
+  type DaemonSnapshot,
+  type DiagnosticReport,
   type GuardSettings,
   type SkillSummary,
   type TabBinding,
   type ToolInfo,
   type ToolResultPayload,
-  randomFromRange,
-  sleep,
 } from '../shared/protocol';
-import { initialGuardState } from './guards';
+import { initialGuardState, type GuardRuntimeState } from './guards';
 import { GuardController } from './guards-runtime';
-import { hydrateHistory } from './history';
-import { findInput, insertText, readInputText, submitInput, type InputEl } from './injector';
+import { callKey, hydrateHistory } from './history';
+import {
+  findInput,
+  findSendButton,
+  insertText,
+  readInputText,
+  submitInput,
+  type InputEl,
+} from './injector';
 import { StreamObserver } from './observer';
 import { composeTurnReply, type ParsedCall, type ResolvedCall } from './parser';
 import { TurnBatch } from './turn';
@@ -38,13 +50,155 @@ const BUNDLED: Record<string, unknown> = {
   'universal-fallback': universal,
 };
 
+// Prevent double initialization if injected via scripting.executeScript on a
+// page that already has the content script loaded.
+const INIT_FLAG = '__pdock_content_initialized__';
+
+// ---------------------------------------------------------------------------
+// Resilient PortClient: survives MV3 service-worker sleep/restarts and owns
+// all request/response correlation cleanly (no leaked listeners).
+// ---------------------------------------------------------------------------
+
+interface PendingPortReq {
+  resolve: (msg: Record<string, unknown>) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+class PortClient {
+  private port: chrome.runtime.Port | null = null;
+  private pending = new Map<string, PendingPortReq>();
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  private invalidated = false;
+
+  constructor(
+    private onEvent: (msg: Record<string, unknown>) => void,
+    private onInvalidated: () => void,
+  ) {}
+
+  connect(): void {
+    if (this.invalidated) return;
+    if (this.port) return;
+    try {
+      const p = chrome.runtime.connect({ name: 'pdock-content' });
+      this.port = p;
+      p.onMessage.addListener((msg: Record<string, unknown>) => {
+        const id = typeof msg.id === 'string' ? msg.id : null;
+        if (id && this.pending.has(id) && (msg.t === 'toolResult' || msg.t === 'manifestResult')) {
+          const entry = this.pending.get(id)!;
+          this.pending.delete(id);
+          clearTimeout(entry.timer);
+          entry.resolve(msg);
+          return;
+        }
+        this.onEvent(msg);
+      });
+      p.onDisconnect.addListener(() => {
+        this.port = null;
+        this.failPending('Extension background disconnected — reconnecting…');
+        // Check if extension was reloaded/updated (chrome.runtime.id becomes undefined).
+        if (!chrome.runtime?.id) {
+          this.invalidated = true;
+          this.stopKeepalive();
+          this.onInvalidated();
+          return;
+        }
+        this.scheduleReconnect();
+      });
+      p.postMessage({ t: 'hello' });
+      this.startKeepalive();
+    } catch {
+      this.invalidated = true;
+      this.onInvalidated();
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer || this.invalidated) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, 600);
+  }
+
+  private startKeepalive(): void {
+    if (this.keepaliveTimer) return;
+    this.keepaliveTimer = setInterval(() => {
+      if (this.port) {
+        try {
+          this.port.postMessage({ t: 'ping' });
+        } catch {
+          this.port = null;
+          this.scheduleReconnect();
+        }
+      }
+    }, 20_000);
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepaliveTimer) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = null;
+    }
+  }
+
+  post(msg: Record<string, unknown>): boolean {
+    if (this.invalidated) return false;
+    if (!this.port) {
+      this.connect();
+    }
+    if (!this.port) return false;
+    try {
+      this.port.postMessage(msg);
+      return true;
+    } catch {
+      this.port = null;
+      this.scheduleReconnect();
+      return false;
+    }
+  }
+
+  request(
+    msg: Record<string, unknown>,
+    timeoutMs: number,
+  ): Promise<Record<string, unknown>> {
+    return new Promise((resolve, reject) => {
+      const id = nextRequestId(String(msg.t ?? 'req'));
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Timed out after ${Math.round(timeoutMs / 1000)}s — daemon did not answer`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      if (!this.post({ ...msg, id })) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(new Error('Extension background is unavailable — try reloading the tab'));
+      }
+    });
+  }
+
+  private failPending(reason: string): void {
+    for (const [, p] of this.pending) {
+      clearTimeout(p.timer);
+      p.reject(new Error(reason));
+    }
+    this.pending.clear();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Content Orchestrator State
+// ---------------------------------------------------------------------------
+
 interface RuntimeCtx {
-  port: chrome.runtime.Port;
+  client: PortClient;
   adapter: AdapterDef;
   settings: GuardSettings;
   tools: ToolInfo[];
   skills: SkillSummary[];
   binding: TabBinding | null;
+  connected: boolean;
 }
 
 let ctx: RuntimeCtx | null = null;
@@ -54,41 +208,65 @@ let guards: GuardController | null = null;
 let trustedTools: string[] = [];
 let activeBatch: TurnBatch | null = null;
 let activeCards = new Map<string, ToolCard>();
+let activeTurnGeneration = 0;
 let prependedThisThread = false;
 let cachedManifest: { xml: string; tools: ToolInfo[] } | null = null;
+const firedCallKeys = new Set<string>();
 
 function main(): void {
-  const port = chrome.runtime.connect({ name: 'pdock-content' });
-  port.onMessage.addListener((msg: Record<string, unknown>) => {
-    void handlePortMessage(msg);
-  });
+  const win = window as unknown as Record<string, unknown>;
+  if (win[INIT_FLAG]) return;
+  win[INIT_FLAG] = true;
 
-  // Adapter selection: user overrides (persisted by bg) -> bundled -> universal.
   void (async () => {
     const adapter = await selectAdapter();
     if (!adapter) {
       console.info('[pdock] no enabled adapter for this host');
       return;
     }
+
+    const client = new PortClient(
+      (msg) => void handlePortMessage(msg),
+      () => {
+        controlBar?.setBound(false);
+        controlBar?.showToast(
+          'PhantomDock was updated — refresh this tab to reconnect.',
+          'err',
+          10_000,
+        );
+      },
+    );
+
     ctx = {
-      port,
+      client,
       adapter,
       settings: { ...DEFAULT_SETTINGS },
       tools: [],
       skills: [],
       binding: null,
+      connected: false,
     };
-    // Full init arrives from the background as response to 'hello'.
-    port.postMessage({ t: 'hello' });
+
+    initUi();
+    client.connect();
 
     observer = new StreamObserver(adapter, {
       onToolTurn: (calls, assistantEl) => void handleToolTurn(calls, assistantEl),
-      onToolResultUserMessage: (userEl) => collapseToolResultBubble(userEl, []),
+      onToolResultUserMessage: (userEl, names) => {
+        collapseToolResultBubble(userEl, names);
+      },
+      onStreamingChange: (streaming) => {
+        controlBar?.setStreamingBadge(streaming);
+      },
+      onThreadChange: () => {
+        handleThreadChange();
+      },
     });
     observer.start();
 
-    hydrateHistory(adapter);
-    installManualSendHooks(adapter);
+    hydrateHistory(adapter).firedKeys.forEach((k) => firedCallKeys.add(k));
+    observer.snapshotLastAssistant();
+    installManualSendHooks();
   })();
 }
 
@@ -100,7 +278,7 @@ async function selectAdapter(): Promise<AdapterDef | null> {
       ok: boolean;
       adapters: Record<string, unknown>;
     };
-    adapters = res.adapters ?? { ...BUNDLED };
+    adapters = res?.adapters ?? { ...BUNDLED };
   } catch {
     adapters = { ...BUNDLED };
   }
@@ -123,52 +301,74 @@ async function selectAdapter(): Promise<AdapterDef | null> {
   return fallback ?? null;
 }
 
+function applyDaemonState(binding: TabBinding | null, daemon: DaemonSnapshot | null): void {
+  if (!ctx) return;
+  ctx.binding = binding;
+  ctx.connected = Boolean(binding && daemon?.connected);
+  ctx.tools = daemon?.tools ?? [];
+  ctx.skills = daemon?.skills ?? [];
+
+  if (ctx.connected && binding) {
+    controlBar?.setBound(true, `:${binding.port}`);
+    controlBar?.setSkills(ctx.skills);
+    // Prefetch manifest so Attach Workspace & autoPrependFirstTurn are instant.
+    void requestManifest().then((m) => {
+      if (m) {
+        cachedManifest = m;
+        if (ctx) ctx.tools = m.tools;
+      }
+    });
+  } else {
+    cachedManifest = null;
+    controlBar?.setBound(false);
+    controlBar?.setSkills([]);
+  }
+}
+
 async function handlePortMessage(msg: Record<string, unknown>): Promise<void> {
+  if (!ctx) return;
   switch (msg.t) {
     case 'init': {
-      if (!ctx) return;
       ctx.settings = (msg.settings as GuardSettings) ?? ctx.settings;
-      ctx.binding = (msg.binding as TabBinding) ?? null;
       trustedTools = (msg.trustedTools as string[]) ?? [];
-      const daemon = msg.daemon as
-        | { info: unknown; tools: ToolInfo[]; skills: SkillSummary[]; connected: boolean }
-        | null;
-      if (daemon) {
-        ctx.tools = daemon.tools ?? [];
-        ctx.skills = daemon.skills ?? [];
+      guards?.updateSettings(ctx.settings);
+      if (msg.turnState) {
+        guards?.hydrateState(msg.turnState as GuardRuntimeState);
       }
-      initUi();
-      // Prefetch the manifest so autoPrependFirstTurn can act synchronously.
-      if (ctx.binding) {
-        void requestManifest().then((m) => {
-          cachedManifest = m;
-        });
+      applyDaemonState(
+        (msg.binding as TabBinding | null) ?? null,
+        (msg.daemon as DaemonSnapshot | null) ?? null,
+      );
+      break;
+    }
+    case 'bindingUpdated': {
+      const binding = (msg.binding as TabBinding | null) ?? null;
+      const daemon = (msg.daemon as DaemonSnapshot | null) ?? null;
+      applyDaemonState(binding, daemon);
+      if (binding && daemon?.connected) {
+        controlBar?.showToast(`Paired with pdock :${binding.port}`, 'ok');
+      } else if (!binding) {
+        controlBar?.showToast('Unbound from pdock', 'info');
       }
       break;
     }
-    case 'toolResult': {
-      // Correlate to the awaiting card via its request id (id === call.id).
-      const id = String(msg.id);
-      const card = activeCards.get(id);
-      if (card && msg.ok) {
-        card.setResolved({
-          call: card.call,
-          approved: true,
-          result: msg.result as ToolResultPayload,
-        });
-        activeBatch?.settle(card.call, true, (msg.result as ToolResultPayload) ?? null);
-      } else if (card && !msg.ok) {
-        card.setResolved({ call: card.call, approved: false, result: null });
-        activeBatch?.settle(card.call, false, null);
+    case 'daemonConnected': {
+      const daemon = (msg.daemon as DaemonSnapshot | null) ?? null;
+      if (ctx.binding && daemon) {
+        applyDaemonState(ctx.binding, daemon);
+        controlBar?.showToast(`Reconnected to pdock :${ctx.binding.port}`, 'ok');
       }
-      // Popup-initiated calls resolve via their own runTool promise listeners.
+      break;
+    }
+    case 'daemonDisconnected': {
+      ctx.connected = false;
+      controlBar?.setBound(false);
+      controlBar?.showToast('pdock daemon disconnected', 'err');
       break;
     }
     case 'settingsChanged': {
-      if (ctx && guards) {
-        ctx.settings = msg.settings as GuardSettings;
-        guards.updateSettings(ctx.settings);
-      }
+      ctx.settings = msg.settings as GuardSettings;
+      guards?.updateSettings(ctx.settings);
       break;
     }
     case 'stopChanged': {
@@ -179,13 +379,53 @@ async function handlePortMessage(msg: Record<string, unknown>): Promise<void> {
       await attachSkillFromPopup(String(msg.name));
       break;
     }
-    case 'daemonDisconnected': {
-      controlBar?.setBound(false);
+    case 'adaptersChanged': {
+      const fresh = await selectAdapter();
+      if (fresh && ctx) {
+        ctx.adapter = fresh;
+        observer?.updateAdapter(fresh);
+        guards?.updateAdapter(fresh);
+        controlBar?.showToast(`Reloaded adapter: ${fresh.name}`, 'ok');
+      }
+      break;
+    }
+    case 'diagnose': {
+      const report = buildDiagnosticReport();
+      ctx.client.post({ t: 'diagnoseResult', id: msg.id, report });
       break;
     }
     default:
       break;
   }
+}
+
+function buildDiagnosticReport(): DiagnosticReport {
+  const a = ctx!.adapter;
+  let assistantCount = 0;
+  let userCount = 0;
+  try {
+    assistantCount = document.querySelectorAll(a.selectors.assistantMessage).length;
+  } catch {
+    /* ignore */
+  }
+  try {
+    userCount = document.querySelectorAll(a.selectors.userMessage).length;
+  } catch {
+    /* ignore */
+  }
+  return {
+    adapterId: a.id,
+    adapterName: a.name,
+    host: location.hostname,
+    bound: Boolean(ctx?.connected),
+    inputFound: Boolean(findInput(a)),
+    sendButtonFound: Boolean(findSendButton(a)),
+    assistantCount,
+    userCount,
+    streaming: observer?.isStreamingNow() ?? false,
+    challengeVisible: guards?.isChallengeVisible() ?? false,
+    rateLimitVisible: guards?.isRateLimitVisible() ?? false,
+  };
 }
 
 function initUi(): void {
@@ -196,15 +436,15 @@ function initUi(): void {
       onAttachSkill: (name) => void attachSkillFromPopup(name),
       onStopToggle: (stopped) => {
         guards?.setStopped(stopped);
-        ctx?.port.postMessage({ t: 'setStopped', stopped });
+        ctx?.client.post({ t: 'setStopped', stopped });
+      },
+      onCancelBatch: () => {
+        cancelActiveTurn('Current tool batch cancelled.');
       },
     },
     ctx.skills,
-    Boolean(ctx.binding),
+    ctx.connected,
   );
-  if (ctx.binding) {
-    controlBar.setBound(true, `:${ctx.binding.port}`);
-  }
 
   guards = new GuardController(
     ctx.adapter,
@@ -213,115 +453,194 @@ function initUi(): void {
       setBadge: () => undefined, // bg owns the action badge
       onStateChange: (s) => controlBar?.setGuardSummary(s),
     },
-    () => undefined, // per-turn persistence flows through bg (turnSent)
+    (until, streak, reason) => {
+      ctx?.client.post({ t: 'cooldownTripped', until, streak, reason });
+    },
     initialGuardState(),
   );
   guards.start();
 }
 
+function handleThreadChange(): void {
+  cancelActiveTurn();
+  prependedThisThread = false;
+  firedCallKeys.clear();
+  if (!ctx || !observer) return;
+  // Give the SPA a moment to render the new thread's history before snapshotting.
+  setTimeout(() => {
+    if (!ctx || !observer) return;
+    hydrateHistory(ctx.adapter).firedKeys.forEach((k) => firedCallKeys.add(k));
+    observer.snapshotLastAssistant();
+  }, 600);
+}
+
+function cancelActiveTurn(toastMsg?: string): void {
+  activeTurnGeneration += 1;
+  for (const card of activeCards.values()) {
+    card.remove();
+  }
+  activeCards.clear();
+  activeBatch = null;
+  controlBar?.setBatchActive(false);
+  observer?.resume(true);
+  if (toastMsg) {
+    controlBar?.showToast(toastMsg, 'info');
+  }
+}
+
 // ---- workspace attachment ----
 
 async function attachWorkspace(): Promise<void> {
-  if (!ctx || !observer) return;
+  if (!ctx) return;
+  if (!ctx.binding || !ctx.connected) {
+    controlBar?.showToast('Not paired — click the PhantomDock icon to pair with pdock.', 'err');
+    return;
+  }
   const input = findInput(ctx.adapter);
-  if (!input) return;
+  if (!input) {
+    controlBar?.showToast(`Chat input not found for adapter "${ctx.adapter.name}".`, 'err');
+    return;
+  }
   const manifest = cachedManifest ?? (await requestManifest());
   if (!manifest) {
-    controlBar?.setBound(false);
+    controlBar?.showToast('Could not fetch workspace manifest from pdock.', 'err');
     return;
   }
   cachedManifest = manifest;
   ctx.tools = manifest.tools;
-  insertText(input, manifest.xml, false);
-  prependedThisThread = true;
+  const ok = insertText(
+    input,
+    `${manifest.xml}\n\n(Silent workspace context — do not reply to this message. Wait for the user's actual request.)`,
+    false,
+  );
+  if (ok) {
+    prependedThisThread = true;
+    controlBar?.showToast('Workspace context inserted into chat input.', 'ok');
+  } else {
+    controlBar?.showToast('Failed to insert workspace context into input.', 'err');
+  }
 }
 
-function requestManifest(): Promise<{ xml: string; tools: ToolInfo[] } | null> {
-  return new Promise((resolve) => {
-    if (!ctx) return resolve(null);
-    const id = `man_${Date.now()}`;
-    const timer = setTimeout(() => resolve(null), 10000);
-    const onMsg = (msg: Record<string, unknown>): void => {
-      if (msg.t === 'manifestResult' && msg.id === id) {
-        ctx?.port.onMessage.removeListener(onMsg as never);
-        clearTimeout(timer);
-        resolve({ xml: String(msg.xml), tools: msg.tools as ToolInfo[] });
-      }
-    };
-    ctx.port.onMessage.addListener(onMsg as never);
-    ctx.port.postMessage({ t: 'manifest', id });
-  });
+async function requestManifest(): Promise<{ xml: string; tools: ToolInfo[] } | null> {
+  if (!ctx) return null;
+  try {
+    const res = await ctx.client.request({ t: 'manifest' }, 10_000);
+    if (res.ok && typeof res.xml === 'string') {
+      return { xml: res.xml, tools: (res.tools as ToolInfo[]) ?? [] };
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 // ---- skill attachment (popup / control bar) ----
 
 async function attachSkillFromPopup(name: string): Promise<void> {
   if (!ctx) return;
+  if (!ctx.binding || !ctx.connected) {
+    controlBar?.showToast('Pair with pdock before attaching a skill.', 'err');
+    return;
+  }
   const input = findInput(ctx.adapter);
   const result = await runTool('activate_skill', { name });
-  if (!result) return;
+  if (result.status === 'error') {
+    controlBar?.showToast(result.text, 'err');
+    return;
+  }
   if (result.status === 'upload_ready' && result.delivery?.mode === 'upload' && input) {
-    await attachSkillFile(
+    const outcome = await attachSkillFile(
       ctx.adapter,
       input,
       result.delivery.filename,
       result.delivery.content,
     );
-  } else if (result.delivery?.mode === 'inline_part') {
-    if (input) insertText(input, result.text, false);
+    if (outcome.mode === 'upload') {
+      controlBar?.showToast(`Attached ${result.delivery.filename}`, 'ok');
+    } else {
+      const inline = await runTool('activate_skill', { name, mode: 'inline' });
+      if (inline.status !== 'error') {
+        insertText(input, inline.text, false);
+        controlBar?.showToast(`Inserted ${name} inline (upload fallback).`, 'ok');
+      } else {
+        controlBar?.showToast(inline.text, 'err');
+      }
+    }
+  } else if (result.delivery?.mode === 'inline_part' && input) {
+    insertText(input, result.text, false);
+    controlBar?.showToast(`Inserted ${name} inline.`, 'ok');
   }
 }
 
-function runTool(
+function errorPayload(text: string): ToolResultPayload {
+  return { status: 'error', text, delivery: null };
+}
+
+async function runTool(
   tool: string,
   args: Record<string, unknown>,
-): Promise<ToolResultPayload | null> {
-  return new Promise((resolve) => {
-    if (!ctx) return resolve(null);
-    const id = `call_${tool}_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-    const timer = setTimeout(() => resolve(null), 30000);
-    const onMsg = (msg: Record<string, unknown>): void => {
-      if (msg.t === 'toolResult' && msg.id === id) {
-        ctx?.port.onMessage.removeListener(onMsg as never);
-        clearTimeout(timer);
-        if (msg.ok) {
-          resolve(msg.result as ToolResultPayload);
-        } else {
-          console.warn('[pdock] tool error:', msg.error);
-          resolve(null);
-        }
-      }
-    };
-    ctx.port.onMessage.addListener(onMsg as never);
-    ctx.port.postMessage({ t: 'toolCall', id, tool, args });
-  });
+): Promise<ToolResultPayload> {
+  if (!ctx) return errorPayload('PhantomDock is not initialized');
+  try {
+    const res = await ctx.client.request({ t: 'toolCall', tool, args }, 180_000);
+    if (res.ok && res.result) {
+      return res.result as ToolResultPayload;
+    }
+    return errorPayload(String(res.error ?? 'Tool execution failed'));
+  } catch (e) {
+    return errorPayload(e instanceof Error ? e.message : String(e));
+  }
 }
 
 // ---- turn lifecycle ----
 
 async function handleToolTurn(calls: ParsedCall[], assistantEl: HTMLElement | null): Promise<void> {
   if (!ctx || !observer || activeBatch) return;
+  if (!ctx.binding) {
+    controlBar?.showToast('Tool call detected, but this tab is not paired with pdock.', 'err');
+    return;
+  }
+
+  const fresh = calls.filter((c) => !firedCallKeys.has(callKey(c)));
+  if (!fresh.length) return;
+  for (const c of fresh) firedCallKeys.add(callKey(c));
+
   observer.pause();
   controlBar?.setStreamingBadge(false);
+  controlBar?.setBatchActive(true);
 
-  const batch = new TurnBatch(calls, (resolved) => void deliverTurnReply(resolved));
+  const generation = ++activeTurnGeneration;
+  const batch = new TurnBatch(fresh, (resolved) => {
+    void deliverTurnReply(resolved, generation);
+  });
   activeBatch = batch;
   activeCards = new Map();
 
+  const updateAllStatusLines = (): void => {
+    const line = batch.statusLine();
+    for (const card of activeCards.values()) {
+      card.setStatusLine(line);
+    }
+  };
+
   const callbacks = {
-    onApprove: (call: ParsedCall) => void executeCall(call),
+    onApprove: (call: ParsedCall) => void executeCall(call, batch, generation, updateAllStatusLines),
     onReject: (call: ParsedCall) => {
+      if (generation !== activeTurnGeneration) return;
       activeCards.get(call.id)?.setResolved({ call, approved: false, result: null });
       batch.settle(call, false, null);
+      updateAllStatusLines();
     },
     onTrustSession: (call: ParsedCall) => {
-      trustedTools.push(call.name);
-      ctx?.port.postMessage({ t: 'trustTool', tool: call.name });
-      void executeCall(call);
+      if (!trustedTools.includes(call.name)) {
+        trustedTools.push(call.name);
+      }
+      ctx?.client.post({ t: 'trustTool', tool: call.name });
+      void executeCall(call, batch, generation, updateAllStatusLines);
     },
   };
 
-  for (const call of calls) {
+  for (const call of fresh) {
     const info = ctx.tools.find((t) => t.name === call.name) ?? null;
     const card = new ToolCard(call, info, callbacks, assistantEl);
     activeCards.set(call.id, card);
@@ -333,42 +652,48 @@ async function handleToolTurn(calls: ParsedCall[], assistantEl: HTMLElement | nu
         info !== null &&
         info.readonly &&
         (info.category === 'fs' || info.category === 'skill'));
+
     if (autoApprove) {
+      card.setRunning();
       await sleep(120);
-      void executeCall(call);
+      if (generation !== activeTurnGeneration) return;
+      void executeCall(call, batch, generation, updateAllStatusLines);
     }
   }
 }
 
-async function executeCall(call: ParsedCall): Promise<void> {
-  if (!ctx) return;
+async function executeCall(
+  call: ParsedCall,
+  batch: TurnBatch,
+  generation: number,
+  updateStatusLines: () => void,
+): Promise<void> {
+  if (!ctx || generation !== activeTurnGeneration) return;
   const result = await runTool(call.name, call.args);
-  if (!result) {
-    const card = activeCards.get(call.id);
-    card?.setResolved({ call, approved: false, result: null });
-    activeBatch?.settle(call, false, null);
-    return;
-  }
-  // Success path: the toolResult port handler resolves card + batch.
-  // Null-check safety for orphaned ids (already settled batches are no-ops).
-  if (!activeBatch?.isResolved(call) && !activeCards.has(call.id)) {
-    activeBatch?.settle(call, true, result);
-  }
+  if (generation !== activeTurnGeneration) return;
+
+  activeCards.get(call.id)?.setResolved({ call, approved: true, result });
+  batch.settle(call, true, result);
+  updateStatusLines();
 }
 
-async function deliverTurnReply(resolved: ResolvedCall[]): Promise<void> {
+async function deliverTurnReply(resolved: ResolvedCall[], generation: number): Promise<void> {
   if (!ctx || !observer || !guards) return;
 
-  // Wait for guards to clear (active-tab gate, challenge, budgets, cooldown).
+  // Wait for guards to clear (active-tab gate, challenge, budgets, cooldown),
+  // aborting cleanly if the user cancels the turn or navigates away.
   for (;;) {
+    if (generation !== activeTurnGeneration) return;
     const verdict = guards.check();
     if (verdict.ok) break;
     await sleep(1000);
   }
+  if (generation !== activeTurnGeneration) return;
 
   const input = findInput(ctx.adapter);
   if (!input) {
-    cleanupTurn();
+    controlBar?.showToast('Could not find chat input to send tool result.', 'err');
+    cleanupTurn(false);
     return;
   }
 
@@ -383,76 +708,107 @@ async function deliverTurnReply(resolved: ResolvedCall[]): Promise<void> {
       const d = r.result.delivery;
       const outcome = await attachSkillFile(ctx.adapter, input, d.filename, d.content);
       if (outcome.mode === 'inline') {
-        // Re-request as inline part 1 via the daemon.
         const skillName = String(r.call.args.name ?? '');
         const inline = await runTool('activate_skill', { name: skillName, mode: 'inline' });
-        finalized.push(
-          inline
-            ? { call: r.call, approved: true, result: inline }
-            : { call: r.call, approved: false, result: null },
-        );
+        finalized.push({ call: r.call, approved: true, result: inline });
         continue;
       }
     }
     finalized.push(r);
   }
+  if (generation !== activeTurnGeneration) return;
 
   const reply = composeTurnReply(finalized);
 
-  // Human-paced: inter-turn cooldown jitter, then insert + submit.
+  // Human-paced inter-turn delay.
   await sleep(randomFromRange(ctx.settings.interTurnDelayRangeMs));
-  const inserted = insertText(input, reply, true);
+  if (generation !== activeTurnGeneration) return;
+
+  // Snapshot the previous assistant message BEFORE submitting so a fast model
+  // reply is never swallowed by resume().
+  observer.snapshotLastAssistant();
+
+  const inserted = insertText(input, reply, ctx.adapter.inputBehavior.clearBeforeInsert);
   if (!inserted) {
-    cleanupTurn();
+    controlBar?.showToast('Failed to insert tool result into chat input.', 'err');
+    cleanupTurn(false);
     return;
   }
-  await submitInput(ctx.adapter, ctx.settings);
-  guards.registerAutoSend();
-  ctx.port.postMessage({ t: 'turnSent' });
 
-  // The observer fires onToolResultUserMessage for the new bubble (pill
-  // collapse); resume watching for the next assistant turn.
-  cleanupTurn();
+  const submitted = await submitInput(ctx.adapter, ctx.settings);
+  if (!submitted) {
+    controlBar?.showToast('Tool result inserted — click Send to submit.', 'info');
+  } else {
+    guards.registerAutoSend();
+    ctx.client.post({ t: 'turnSent' });
+  }
+
+  cleanupTurn(false);
 }
 
-function cleanupTurn(): void {
+function cleanupTurn(snapshotNow: boolean): void {
   activeBatch = null;
+  controlBar?.setBatchActive(false);
+  // Keep resolved cards visible for easy inspection; clear map so next turn starts fresh.
   activeCards = new Map();
-  observer?.resume();
+  observer?.resume(snapshotNow);
 }
 
 // ---- manual-send hooks (budget reset + auto-prepend) ----
 
-function installManualSendHooks(adapter: AdapterDef): void {
+function onManualSendAttempt(): void {
+  if (!ctx) return;
+  ctx.client.post({ t: 'manualSent' });
+  guards?.registerManualSend();
+
+  if (
+    ctx.binding &&
+    ctx.connected &&
+    ctx.settings.autoPrependFirstTurn &&
+    !prependedThisThread &&
+    cachedManifest &&
+    threadIsEmpty()
+  ) {
+    const input = findInput(ctx.adapter) as InputEl | null;
+    const current = input ? readInputText(input).trim() : '';
+    if (input && current && !current.includes('<workspace_context')) {
+      ctx.tools = cachedManifest.tools;
+      insertText(input, `${cachedManifest.xml}\n\n${current}`, true);
+      prependedThisThread = true;
+    }
+  }
+}
+
+function installManualSendHooks(): void {
   document.addEventListener(
     'click',
     (ev) => {
+      if (!ctx) return;
       const target = ev.target as HTMLElement | null;
       if (!target) return;
-      const btn = target.closest(adapter.selectors.sendButton);
-      if (!btn) return;
-      // Manual send resets the consecutive auto-turn counter.
-      ctx?.port.postMessage({ t: 'manualSent' });
-      guards?.registerManualSend();
-
-      // autoPrependFirstTurn: synchronously inject the cached manifest ahead
-      // of the user's first prompt (capture phase runs before React handlers).
-      if (
-        ctx &&
-        ctx.binding &&
-        ctx.settings.autoPrependFirstTurn &&
-        !prependedThisThread &&
-        cachedManifest &&
-        threadIsEmpty()
-      ) {
-        const input = findInput(adapter) as InputEl | null;
-        const current = input ? readInputText(input).trim() : '';
-        if (input && current) {
-          ctx.tools = cachedManifest.tools;
-          insertText(input, `${cachedManifest.xml}\n\n${current}`, true);
-          prependedThisThread = true;
-        }
+      try {
+        if (!target.closest(ctx.adapter.selectors.sendButton)) return;
+      } catch {
+        return;
       }
+      onManualSendAttempt();
+    },
+    { capture: true, passive: true },
+  );
+
+  document.addEventListener(
+    'keydown',
+    (ev) => {
+      if (!ctx) return;
+      if (ev.key !== 'Enter' || ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.isComposing) return;
+      const target = ev.target as HTMLElement | null;
+      if (!target) return;
+      try {
+        if (!target.closest(ctx.adapter.selectors.inputBox)) return;
+      } catch {
+        return;
+      }
+      onManualSendAttempt();
     },
     { capture: true, passive: true },
   );
@@ -460,8 +816,12 @@ function installManualSendHooks(adapter: AdapterDef): void {
 
 function threadIsEmpty(): boolean {
   if (!ctx) return false;
-  const users = document.querySelectorAll(ctx.adapter.selectors.userMessage);
-  return users.length <= 1; // at most the message currently being composed
+  try {
+    const users = document.querySelectorAll(ctx.adapter.selectors.userMessage);
+    return users.length <= 1;
+  } catch {
+    return false;
+  }
 }
 
 main();

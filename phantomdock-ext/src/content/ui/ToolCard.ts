@@ -1,11 +1,13 @@
 // Approval cards for pdock_call blocks: category badge, JSON args or unified
 // diff preview (edit_file / write_file), Approve / Reject / Trust-for-session,
-// turn-level status bar, and collapsed completed state.
+// Running state, turn-level status bar, and collapsed completed state.
+// Mounted in the fixed scrollable dock above ControlBar so multiple calls in
+// one turn never overlap or scroll out of reach.
 
 import type { ToolInfo } from '../../shared/protocol';
 import { collapseContext, diffLines, diffStats } from '../../shared/diff';
 import type { ParsedCall, ResolvedCall } from '../parser';
-import { anchorOver, getShadowRoot, h } from './shadow';
+import { getShadowRoot, h } from './shadow';
 
 export interface ToolCardCallbacks {
   onApprove: (call: ParsedCall) => void;
@@ -17,15 +19,15 @@ export class ToolCard {
   readonly call: ParsedCall;
   private el: HTMLDivElement;
   private bodyEl: HTMLDivElement;
-  private anchorCleanup: (() => void) | null = null;
   private disposed = false;
+  private actionStarted = false;
   stale = false;
 
   constructor(
     call: ParsedCall,
     toolInfo: ToolInfo | null,
     private callbacks: ToolCardCallbacks,
-    anchor: HTMLElement | null,
+    _anchor: HTMLElement | null,
     stale = false,
   ) {
     this.call = call;
@@ -40,14 +42,11 @@ export class ToolCard {
       'div',
       {
         class: 'panel',
-        style: 'position:absolute;pointer-events:auto;padding:10px 12px;margin:6px 0;width:420px;',
+        style: 'pointer-events:auto;padding:10px 12px;width:100%;',
       },
       [this.bodyEl],
     );
-    root.stage.appendChild(this.el);
-    if (anchor) {
-      this.anchorCleanup = anchorOver(this.el, anchor, 'below');
-    }
+    root.dock.appendChild(this.el);
   }
 
   private renderPending(category: string, toolInfo: ToolInfo | null, stale: boolean): void {
@@ -57,11 +56,12 @@ export class ToolCard {
       h('span', { class: `badge ${category}`, text: category.toUpperCase() }),
       h('span', {
         class: 'mono',
-        style: 'font-weight:600;font-size:12px;',
+        style: 'font-weight:600;font-size:12px;overflow:hidden;text-overflow:ellipsis;',
         text: this.call.name,
       }),
       h('div', { class: 'grow' }),
-      stale ? h('span', { class: 'badge', text: 'STALE — previous session' }) : null,
+      stale ? h('span', { class: 'badge', text: 'STALE' }) : null,
+      h('span', { class: 'dim mono', style: 'font-size:10px;', text: this.call.id }),
     ]);
     this.bodyEl.append(header);
 
@@ -74,25 +74,53 @@ export class ToolCard {
       );
     }
 
-    const buttons = h('div', { class: 'row', style: 'margin-top:8px;' }, [
-      h('button', {
-        class: 'btn primary',
-        text: 'Approve',
-        onclick: () => this.callbacks.onApprove(this.call),
-      }),
-      h('button', {
-        class: 'btn',
-        text: 'Reject',
-        onclick: () => this.callbacks.onReject(this.call),
-      }),
-      h('button', {
-        class: 'btn ghost',
-        text: 'Auto-approve this session',
-        title: 'Trust this tool for the rest of the session',
-        onclick: () => this.callbacks.onTrustSession(this.call),
-      }),
+    const approveBtn = h('button', {
+      class: 'btn primary',
+      text: 'Approve',
+      onclick: () => {
+        if (this.actionStarted) return;
+        this.setRunning();
+        this.callbacks.onApprove(this.call);
+      },
+    });
+    const rejectBtn = h('button', {
+      class: 'btn',
+      text: 'Reject',
+      onclick: () => {
+        if (this.actionStarted) return;
+        this.actionStarted = true;
+        this.callbacks.onReject(this.call);
+      },
+    });
+    const trustBtn = h('button', {
+      class: 'btn ghost',
+      text: 'Trust session',
+      title: 'Auto-approve this tool for the rest of the session',
+      onclick: () => {
+        if (this.actionStarted) return;
+        this.setRunning();
+        this.callbacks.onTrustSession(this.call);
+      },
+    });
+
+    const buttons = h('div', { class: 'row', style: 'margin-top:8px;', 'data-actions': '1' }, [
+      approveBtn,
+      rejectBtn,
+      trustBtn,
     ]);
     this.bodyEl.append(buttons);
+  }
+
+  /** Transition card into a non-clickable Running state while daemon executes. */
+  setRunning(): void {
+    if (this.disposed) return;
+    this.actionStarted = true;
+    const actions = this.bodyEl.querySelector('[data-actions]');
+    if (actions) {
+      actions.replaceChildren(
+        h('span', { class: 'dim mono', text: `Running ${this.call.name}…` }),
+      );
+    }
   }
 
   private previewEl(): HTMLElement | null {
@@ -145,7 +173,8 @@ export class ToolCard {
   /** Collapse to a 1-line summary once resolved. */
   setResolved(resolved: ResolvedCall): void {
     if (this.disposed) return;
-    const ok = resolved.approved;
+    this.actionStarted = true;
+    const ok = resolved.approved && resolved.result?.status !== 'error';
     const icon = ok ? '✓' : '✗';
     const cls = ok ? 'status-ok' : 'status-err';
     this.bodyEl.replaceChildren(
@@ -153,20 +182,23 @@ export class ToolCard {
         h('span', { class: cls, style: 'font-weight:700;', text: icon }),
         h('span', {
           class: 'mono',
-          style: 'font-size:12px;',
+          style: 'font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;',
           text: summaryLine(this.call, resolved),
         }),
         h('div', { class: 'grow' }),
         h('button', {
           class: 'btn ghost',
           text: 'Expand',
-          onclick: () => {
-            this.showResultDetail(resolved);
-          },
+          onclick: () => this.showResultDetail(resolved),
+        }),
+        h('button', {
+          class: 'btn ghost',
+          text: '×',
+          title: 'Dismiss card',
+          onclick: () => this.remove(),
         }),
       ]),
     );
-    this.el.style.pointerEvents = 'auto';
   }
 
   private showResultDetail(resolved: ResolvedCall): void {
@@ -184,14 +216,20 @@ export class ToolCard {
           text: 'Collapse',
           onclick: () => this.setResolved(resolved),
         }),
+        h('button', {
+          class: 'btn ghost',
+          text: '×',
+          title: 'Dismiss card',
+          onclick: () => this.remove(),
+        }),
       ]),
-      h('pre', { class: 'code', style: 'max-height:280px;', text }),
+      h('pre', { class: 'code', style: 'max-height:260px;', text }),
     );
   }
 
-  /** Mark as executed during history hydration (never re-runs). */
   setExecutedSummary(line: string): void {
     if (this.disposed) return;
+    this.actionStarted = true;
     this.bodyEl.replaceChildren(
       h('div', { class: 'row' }, [
         h('span', { class: 'status-ok', style: 'font-weight:700;', text: '✓' }),
@@ -203,6 +241,7 @@ export class ToolCard {
   }
 
   setStatusLine(text: string): void {
+    if (this.disposed) return;
     const existing = this.bodyEl.querySelector('[data-statusline]');
     existing?.remove();
     this.bodyEl.append(
@@ -211,8 +250,8 @@ export class ToolCard {
   }
 
   remove(): void {
+    if (this.disposed) return;
     this.disposed = true;
-    this.anchorCleanup?.();
     this.el.remove();
   }
 }
@@ -227,6 +266,7 @@ function guessCategory(name: string): string {
 function summaryLine(call: ParsedCall, resolved: ResolvedCall): string {
   const r = resolved.result;
   if (!resolved.approved) return `${call.name} — rejected`;
+  if (r?.status === 'error') return `${call.name} — ${r.text.slice(0, 80)}`;
   if (!r) return `${call.name}`;
   if (r.status === 'upload_ready' && r.delivery?.mode === 'upload') {
     return `activate_skill → ${r.delivery.filename} attached`;

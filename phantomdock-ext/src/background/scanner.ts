@@ -2,9 +2,9 @@
 // 127.0.0.1:47800-47820/handshake. Runs only when the popup opens or the user
 // clicks Refresh — no persistent polling.
 
-import { PORT_RANGE, type HandshakeInfo } from '../shared/protocol';
+import { PORT_RANGE, PROTOCOL_VERSION, type HandshakeInfo } from '../shared/protocol';
 
-const SCAN_TIMEOUT_MS = 400;
+const SCAN_TIMEOUT_MS = 800;
 
 export async function scanForDaemons(): Promise<HandshakeInfo[]> {
   const attempts = PORT_RANGE.map(async (port): Promise<HandshakeInfo | null> => {
@@ -17,7 +17,7 @@ export async function scanForDaemons(): Promise<HandshakeInfo[]> {
       });
       if (!res.ok) return null;
       const info = (await res.json()) as HandshakeInfo;
-      if (info.protocol_version !== 2) return null; // incompatible daemon
+      if (info.protocol_version !== PROTOCOL_VERSION) return null;
       info.port = port;
       return info;
     } catch {

@@ -26,6 +26,15 @@ describe('bundled adapter presets', () => {
   it('universal fallback matches any host', () => {
     expect(universal.hostMatch).toContain('*');
   });
+
+  it('deepseek userMessage does not match bare .ds-message (which includes assistant turns)', () => {
+    const parts = deepseek.selectors.userMessage.split(',').map((s) => s.trim());
+    expect(parts).not.toContain('.ds-message');
+  });
+
+  it('qwen streamingIndicator does not match the idle send button', () => {
+    expect(qwen.selectors.streamingIndicator).not.toContain('button.send-button:not(.disabled)');
+  });
 });
 
 describe('validateAdapter rejects malformed input', () => {

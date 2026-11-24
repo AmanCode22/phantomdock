@@ -1,5 +1,5 @@
-// chrome.storage wrappers: session-scoped bindings/settings/turn-state,
-// persistent user adapter overrides. All keys are namespaced and versioned.
+// chrome.storage wrappers: session-scoped bindings/turn-state/trusted-tools,
+// persistent settings and user adapter overrides in chrome.storage.local.
 
 import {
   DEFAULT_SETTINGS,
@@ -10,13 +10,17 @@ import { initialGuardState, type GuardRuntimeState } from '../content/guards';
 
 const KEYS = {
   bindings: 'pd_bindings_v1', // session: { [tabId]: TabBinding }
-  settings: 'pd_settings_v1', // session: GuardSettings
+  settings: 'pd_settings_v1', // local: GuardSettings (persists across restarts)
   turnState: 'pd_turnstate_v1', // session: { [tabId]: GuardRuntimeState }
   trustedTools: 'pd_trusted_v1', // session: { [tabId]: string[] }
   adapters: 'pd_adapters_v1', // local: { [id]: AdapterDef }
 } as const;
 
 type MapOf<T> = Record<string, T>;
+
+function sessionArea(): chrome.storage.StorageArea {
+  return chrome.storage.session ?? chrome.storage.local;
+}
 
 async function getFrom<T>(
   area: chrome.storage.StorageArea,
@@ -37,7 +41,7 @@ async function putTo<T>(
 // ---- bindings (session) ----
 
 export async function getBindings(): Promise<MapOf<TabBinding>> {
-  return (await getFrom<chrome.storage.StorageArea>(chrome.storage.session, KEYS.bindings) as never as MapOf<TabBinding>) ?? {};
+  return (await getFrom<MapOf<TabBinding>>(sessionArea(), KEYS.bindings)) ?? {};
 }
 
 export async function getBinding(tabId: number): Promise<TabBinding | null> {
@@ -48,57 +52,69 @@ export async function getBinding(tabId: number): Promise<TabBinding | null> {
 export async function setBinding(tabId: number, binding: TabBinding): Promise<void> {
   const all = await getBindings();
   all[String(tabId)] = binding;
-  await putTo(chrome.storage.session, KEYS.bindings, all);
+  await putTo(sessionArea(), KEYS.bindings, all);
 }
 
 export async function clearBinding(tabId: number): Promise<void> {
   const all = await getBindings();
   delete all[String(tabId)];
-  await putTo(chrome.storage.session, KEYS.bindings, all);
+  await putTo(sessionArea(), KEYS.bindings, all);
 }
 
-// ---- settings (session) ----
+// ---- settings (local, persistent across browser restarts) ----
 
 export async function getSettings(): Promise<GuardSettings> {
-  const stored = await getFrom<GuardSettings>(chrome.storage.session, KEYS.settings);
+  const stored = await getFrom<Partial<GuardSettings>>(chrome.storage.local, KEYS.settings);
   return { ...DEFAULT_SETTINGS, ...(stored ?? {}) };
 }
 
 export async function patchSettings(patch: Partial<GuardSettings>): Promise<GuardSettings> {
   const current = await getSettings();
   const next = { ...current, ...patch };
-  await putTo(chrome.storage.session, KEYS.settings, next);
+  await putTo(chrome.storage.local, KEYS.settings, next);
   return next;
 }
 
 // ---- per-tab turn state (session, survives page reloads) ----
 
 export async function getTurnState(tabId: number): Promise<GuardRuntimeState> {
-  const all = (await getFrom<MapOf<GuardRuntimeState>>(chrome.storage.session, KEYS.turnState)) ?? {};
+  const all = (await getFrom<MapOf<GuardRuntimeState>>(sessionArea(), KEYS.turnState)) ?? {};
   return all[String(tabId)] ?? initialGuardState();
 }
 
 export async function putTurnState(tabId: number, state: GuardRuntimeState): Promise<void> {
-  const all = (await getFrom<MapOf<GuardRuntimeState>>(chrome.storage.session, KEYS.turnState)) ?? {};
+  const all = (await getFrom<MapOf<GuardRuntimeState>>(sessionArea(), KEYS.turnState)) ?? {};
   all[String(tabId)] = state;
-  await putTo(chrome.storage.session, KEYS.turnState, all);
+  await putTo(sessionArea(), KEYS.turnState, all);
+}
+
+export async function clearTurnState(tabId: number): Promise<void> {
+  const all = (await getFrom<MapOf<GuardRuntimeState>>(sessionArea(), KEYS.turnState)) ?? {};
+  delete all[String(tabId)];
+  await putTo(sessionArea(), KEYS.turnState, all);
 }
 
 // ---- per-tab session-trusted tools ----
 
 export async function getTrustedTools(tabId: number): Promise<string[]> {
-  const all = (await getFrom<MapOf<string[]>>(chrome.storage.session, KEYS.trustedTools)) ?? {};
+  const all = (await getFrom<MapOf<string[]>>(sessionArea(), KEYS.trustedTools)) ?? {};
   return all[String(tabId)] ?? [];
 }
 
 export async function addTrustedTool(tabId: number, tool: string): Promise<void> {
-  const all = (await getFrom<MapOf<string[]>>(chrome.storage.session, KEYS.trustedTools)) ?? {};
+  const all = (await getFrom<MapOf<string[]>>(sessionArea(), KEYS.trustedTools)) ?? {};
   const list = all[String(tabId)] ?? [];
   if (!list.includes(tool)) {
     list.push(tool);
   }
   all[String(tabId)] = list;
-  await putTo(chrome.storage.session, KEYS.trustedTools, all);
+  await putTo(sessionArea(), KEYS.trustedTools, all);
+}
+
+export async function clearTrustedTools(tabId: number): Promise<void> {
+  const all = (await getFrom<MapOf<string[]>>(sessionArea(), KEYS.trustedTools)) ?? {};
+  delete all[String(tabId)];
+  await putTo(sessionArea(), KEYS.trustedTools, all);
 }
 
 // ---- user adapter overrides (local, persistent) ----

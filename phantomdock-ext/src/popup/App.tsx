@@ -1,10 +1,11 @@
 // PhantomDock popup: pairing, guard/timing controls, adapter editor,
-// skills + MCP health — all through the background context (never localhost).
+// skills + MCP health + live DOM diagnostics — all through background context.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DEFAULT_SETTINGS,
   type BgRequest,
+  type DiagnosticReport,
   type GuardSettings,
   type HandshakeInfo,
   type SkillSummary,
@@ -19,20 +20,30 @@ function send<T>(msg: BgRequest): Promise<T> {
   });
 }
 
+type PopupTab = 'main' | 'guards' | 'adapters';
+
 export default function App(): JSX.Element {
   const [tabId, setTabId] = useState<number | null>(null);
   const [tabHost, setTabHost] = useState('');
+  const [activeTab, setActiveTab] = useState<PopupTab>('main');
   const [binding, setBinding] = useState<TabBinding | null>(null);
   const [daemon, setDaemon] = useState<HandshakeInfo | null>(null);
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [connected, setConnected] = useState(false);
+  const [contentActive, setContentActive] = useState(false);
   const [daemons, setDaemons] = useState<HandshakeInfo[]>([]);
   const [scanning, setScanning] = useState(false);
   const [selectedPort, setSelectedPort] = useState<number | null>(null);
   const [token, setToken] = useState('');
   const [pairError, setPairError] = useState('');
+  const [pairing, setPairing] = useState(false);
   const [settings, setSettings] = useState<GuardSettings>(DEFAULT_SETTINGS);
+  const [diag, setDiag] = useState<DiagnosticReport | null>(null);
+  const [diagError, setDiagError] = useState('');
+  const [injectMsg, setInjectMsg] = useState('');
+  const selectedPortRef = useRef<number | null>(null);
+  selectedPortRef.current = selectedPort;
 
   useEffect(() => {
     void (async () => {
@@ -44,6 +55,10 @@ export default function App(): JSX.Element {
         } catch {
           setTabHost('');
         }
+      }
+      const sRes = await send<{ ok: boolean; settings: GuardSettings }>({ t: 'getSettings' });
+      if (sRes?.ok && sRes.settings) {
+        setSettings(sRes.settings);
       }
     })();
   }, []);
@@ -57,13 +72,15 @@ export default function App(): JSX.Element {
       tools: ToolInfo[];
       skills: SkillSummary[];
       connected: boolean;
+      contentActive: boolean;
     }>({ t: 'getStatus', tabId });
-    if (res.ok) {
+    if (res?.ok) {
       setBinding(res.binding);
       setDaemon(res.daemonInfo);
       setTools(res.tools ?? []);
       setSkills(res.skills ?? []);
       setConnected(res.connected);
+      setContentActive(Boolean(res.contentActive));
     }
   }, [tabId]);
 
@@ -71,14 +88,14 @@ export default function App(): JSX.Element {
     setScanning(true);
     setPairError('');
     const res = await send<{ ok: boolean; daemons: HandshakeInfo[] }>({ t: 'scan' });
-    if (res.ok) {
+    if (res?.ok) {
       setDaemons(res.daemons);
-      if (res.daemons.length && selectedPort === null) {
+      if (res.daemons.length && selectedPortRef.current === null) {
         setSelectedPort(res.daemons[0].port);
       }
     }
     setScanning(false);
-  }, [selectedPort]);
+  }, []);
 
   useEffect(() => {
     void scan();
@@ -95,6 +112,7 @@ export default function App(): JSX.Element {
       setPairError('Pick a daemon and paste the pairing token printed by pdock.');
       return;
     }
+    setPairing(true);
     setPairError('');
     const res = await send<{ ok: boolean; error?: string }>({
       t: 'bind',
@@ -102,13 +120,25 @@ export default function App(): JSX.Element {
       port: selectedPort,
       token: token.trim(),
     });
-    if (res.ok) {
+    setPairing(false);
+    if (res?.ok) {
       setToken('');
       await refreshStatus();
     } else {
-      setPairError(res.error ?? 'pairing failed');
+      setPairError(res?.error ?? 'pairing failed');
     }
   }, [tabId, selectedPort, token, refreshStatus]);
+
+  const reconnect = useCallback(async () => {
+    if (tabId === null) return;
+    setPairError('');
+    const res = await send<{ ok: boolean; error?: string }>({ t: 'reconnect', tabId });
+    if (res?.ok) {
+      await refreshStatus();
+    } else {
+      setPairError(res?.error ?? 'reconnect failed');
+    }
+  }, [tabId, refreshStatus]);
 
   const unbind = useCallback(async () => {
     if (tabId === null) return;
@@ -125,6 +155,45 @@ export default function App(): JSX.Element {
     [settings],
   );
 
+  const runDiagnostics = useCallback(async () => {
+    if (tabId === null) return;
+    setDiagError('');
+    const res = await send<{ ok: boolean; report?: DiagnosticReport; error?: string }>({
+      t: 'diagnoseTab',
+      tabId,
+    });
+    if (res?.ok && res.report) {
+      setDiag(res.report);
+    } else {
+      setDiag(null);
+      setDiagError(res?.error ?? 'Diagnostics unavailable on this tab.');
+    }
+  }, [tabId]);
+
+  const injectHere = useCallback(async () => {
+    if (tabId === null) return;
+    setInjectMsg('');
+    const origin = await currentTabOrigin();
+    let granted = true;
+    try {
+      granted = await chrome.permissions.request({ origins: [origin] });
+    } catch {
+      granted = false;
+    }
+    if (!granted) {
+      setInjectMsg('Host permission denied.');
+      return;
+    }
+    const res = await send<{ ok: boolean; error?: string }>({
+      t: 'injectHere',
+      tabId,
+    });
+    setInjectMsg(
+      res?.ok ? 'Content script injected into this tab.' : res?.error ?? 'Injection failed',
+    );
+    await refreshStatus();
+  }, [tabId, refreshStatus]);
+
   const bound = binding !== null && connected;
 
   return (
@@ -134,43 +203,99 @@ export default function App(): JSX.Element {
         <h1>PhantomDock</h1>
         <span
           className={`dot ${bound ? 'on' : binding ? 'off' : ''}`}
-          title={bound ? 'connected' : 'not connected'}
+          title={bound ? 'connected' : binding ? 'disconnected' : 'not paired'}
         />
       </header>
 
-      <ConnectionPanel
-        bound={bound}
-        binding={binding}
-        daemon={daemon}
-        daemons={daemons}
-        scanning={scanning}
-        selectedPort={selectedPort}
-        token={token}
-        pairError={pairError}
-        tabHost={tabHost}
-        onSelectPort={setSelectedPort}
-        onToken={setToken}
-        onScan={() => void scan()}
-        onPair={() => void pair()}
-        onUnbind={() => void unbind()}
-      />
+      <nav className="tabs">
+        <button
+          className={activeTab === 'main' ? 'active' : ''}
+          onClick={() => setActiveTab('main')}
+        >
+          Workspace
+        </button>
+        <button
+          className={activeTab === 'guards' ? 'active' : ''}
+          onClick={() => setActiveTab('guards')}
+        >
+          Guards
+        </button>
+        <button
+          className={activeTab === 'adapters' ? 'active' : ''}
+          onClick={() => setActiveTab('adapters')}
+        >
+          Adapters
+        </button>
+      </nav>
 
-      {bound ? (
+      {activeTab === 'main' ? (
         <>
-          <DaemonPanel daemon={daemon} tools={tools} skills={skills} tabId={tabId} />
-          <GuardsPanel settings={settings} onPatch={(p) => void patch(p)} />
-          <AdapterPanel />
+          <ConnectionPanel
+            bound={bound}
+            binding={binding}
+            daemon={daemon}
+            daemons={daemons}
+            scanning={scanning}
+            pairing={pairing}
+            selectedPort={selectedPort}
+            token={token}
+            pairError={pairError}
+            tabHost={tabHost}
+            contentActive={contentActive}
+            onSelectPort={setSelectedPort}
+            onToken={setToken}
+            onScan={() => void scan()}
+            onPair={() => void pair()}
+            onReconnect={() => void reconnect()}
+            onUnbind={() => void unbind()}
+          />
+
+          {bound ? (
+            <DaemonPanel daemon={daemon} tools={tools} skills={skills} tabId={tabId} />
+          ) : null}
+
+          <section>
+            <h2>Tab &amp; Diagnostics</h2>
+            <div className="row">
+              <span className={`badge ${contentActive ? 'ok' : 'warn'}`}>
+                {contentActive ? 'ACTIVE' : 'INACTIVE'}
+              </span>
+              <span className="dim small">{tabHost || 'unsupported tab'}</span>
+              <div className="grow" />
+              {!contentActive ? (
+                <button onClick={() => void injectHere()}>Enable on site</button>
+              ) : null}
+              <button onClick={() => void runDiagnostics()} disabled={!contentActive}>
+                Test Selectors
+              </button>
+            </div>
+            {injectMsg ? <div className="dim small">{injectMsg}</div> : null}
+            {diagError ? <div className="error-box small">{diagError}</div> : null}
+            {diag ? (
+              <div className="diag-grid small mono">
+                <div>Adapter: {diag.adapterName}</div>
+                <div>Input: {diag.inputFound ? '✓ found' : '✗ missing'}</div>
+                <div>Send btn: {diag.sendButtonFound ? '✓ found' : '✗ missing'}</div>
+                <div>
+                  Msgs: {diag.assistantCount} asst · {diag.userCount} user
+                </div>
+                <div>Streaming: {diag.streaming ? 'yes' : 'no'}</div>
+                <div>
+                  Banners: {diag.challengeVisible ? 'CAPTCHA ' : ''}
+                  {diag.rateLimitVisible ? 'RATE-LIMIT' : ''}
+                  {!diag.challengeVisible && !diag.rateLimitVisible ? 'none' : ''}
+                </div>
+              </div>
+            ) : null}
+          </section>
         </>
-      ) : (
-        <section>
-          <h2>Not paired</h2>
-          <p className="dim small">
-            Run <span className="mono">pdock</span> in your project, pick the workspace above, and
-            paste the one-time pairing token. Bind a web-AI tab to unlock workspace tools, skills,
-            and MCP.
-          </p>
-        </section>
-      )}
+      ) : null}
+
+      {activeTab === 'guards' ? (
+        <GuardsPanel settings={settings} onPatch={(p) => void patch(p)} />
+      ) : null}
+
+      {activeTab === 'adapters' ? <AdapterPanel /> : null}
 
       <footer>
         <span>PhantomDock v0.1.0 · protocol v2</span>
@@ -188,14 +313,17 @@ function ConnectionPanel(props: {
   daemon: HandshakeInfo | null;
   daemons: HandshakeInfo[];
   scanning: boolean;
+  pairing: boolean;
   selectedPort: number | null;
   token: string;
   pairError: string;
   tabHost: string;
+  contentActive: boolean;
   onSelectPort: (p: number) => void;
   onToken: (t: string) => void;
   onScan: () => void;
   onPair: () => void;
+  onReconnect: () => void;
   onUnbind: () => void;
 }): JSX.Element {
   const { bound, binding, daemon } = props;
@@ -218,10 +346,19 @@ function ConnectionPanel(props: {
         </>
       ) : (
         <>
+          {binding ? (
+            <div className="row">
+              <span className="badge err">DISCONNECTED</span>
+              <span className="mono small">:{binding.port}</span>
+              <div className="grow" />
+              <button className="primary" onClick={props.onReconnect}>
+                Reconnect
+              </button>
+              <button onClick={props.onUnbind}>Unbind</button>
+            </div>
+          ) : null}
           <div className="row">
-            <span className="dim small">
-              Daemons on 127.0.0.1:47800-47820 {props.tabHost ? `· tab: ${props.tabHost}` : ''}
-            </span>
+            <span className="dim small">Daemons on 127.0.0.1:47800–47820</span>
             <div className="grow" />
             <button onClick={props.onScan} disabled={props.scanning}>
               {props.scanning ? 'Scanning…' : 'Refresh'}
@@ -256,9 +393,18 @@ function ConnectionPanel(props: {
               placeholder="Pairing token (printed once by pdock)"
               value={props.token}
               onChange={(e) => props.onToken(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && props.selectedPort && props.token.trim()) {
+                  props.onPair();
+                }
+              }}
             />
-            <button className="primary" onClick={props.onPair} disabled={!props.selectedPort}>
-              Pair &amp; Bind
+            <button
+              className="primary"
+              onClick={props.onPair}
+              disabled={!props.selectedPort || props.pairing}
+            >
+              {props.pairing ? 'Pairing…' : 'Pair & Bind'}
             </button>
           </div>
           {props.pairError ? <div className="error-box">{props.pairError}</div> : null}
@@ -288,8 +434,6 @@ function DaemonPanel(props: {
 }): JSX.Element {
   const { daemon, tools, skills } = props;
   const [attachMsg, setAttachMsg] = useState('');
-  const [injectMsg, setInjectMsg] = useState('');
-  const [injected, setInjected] = useState(false);
 
   const attachSkill = async (name: string): Promise<void> => {
     if (props.tabId === null) return;
@@ -300,30 +444,7 @@ function DaemonPanel(props: {
       name,
     });
     setAttachMsg(
-      res.ok ? `Attaching ${name}-skill.md to the chat input…` : res.error ?? 'failed',
-    );
-  };
-
-  const injectHere = async (): Promise<void> => {
-    if (props.tabId === null) return;
-    const origin = await currentTabOrigin();
-    let granted = true;
-    try {
-      granted = await chrome.permissions.request({ origins: [origin] });
-    } catch {
-      granted = false;
-    }
-    if (!granted) {
-      setInjectMsg('Host permission denied.');
-      return;
-    }
-    const res = await send<{ ok: boolean; error?: string }>({
-      t: 'injectHere',
-      tabId: props.tabId,
-    });
-    setInjected(res.ok);
-    setInjectMsg(
-      res.ok ? 'Injected. Reload the tab to re-activate after updates.' : res.error ?? 'failed',
+      res?.ok ? `Attaching ${name}-skill.md to the chat input…` : res?.error ?? 'failed',
     );
   };
 
@@ -376,13 +497,6 @@ function DaemonPanel(props: {
         )}
       </div>
       {attachMsg ? <div className="dim small">{attachMsg}</div> : null}
-      {!injected ? (
-        <div className="row" style={{ marginTop: 8 }}>
-          <button onClick={() => void injectHere()}>Enable PhantomDock on this site</button>
-          <span className="dim small">for sites without a bundled adapter</span>
-        </div>
-      ) : null}
-      {injectMsg ? <div className="dim small">{injectMsg}</div> : null}
     </section>
   );
 }
@@ -489,6 +603,14 @@ function GuardsPanel(props: {
       <label className="check small">
         <input
           type="checkbox"
+          checked={s.challengeWatch}
+          onChange={(e) => props.onPatch({ challengeWatch: e.target.checked })}
+        />
+        CAPTCHA / challenge circuit breaker
+      </label>
+      <label className="check small">
+        <input
+          type="checkbox"
           checked={s.autoSendAllParts}
           onChange={(e) => props.onPatch({ autoSendAllParts: e.target.checked })}
         />
@@ -514,7 +636,7 @@ function AdapterPanel(): JSX.Element {
       adapters: Record<string, unknown>;
       bundled: string[];
     }>({ t: 'getAdapters' });
-    if (res.ok) {
+    if (res?.ok) {
       const validated: Record<string, AdapterDef> = {};
       for (const [id, v] of Object.entries(res.adapters)) {
         const r = validateAdapter(v);
@@ -555,11 +677,11 @@ function AdapterPanel(): JSX.Element {
       return;
     }
     const res = await send<{ ok: boolean; error?: string }>({ t: 'saveAdapter', def: parsed });
-    if (res.ok) {
+    if (res?.ok) {
       setSaved(true);
       await load();
     } else {
-      setError(res.error ?? 'validation failed');
+      setError(res?.error ?? 'validation failed');
     }
   };
 
@@ -567,7 +689,7 @@ function AdapterPanel(): JSX.Element {
     if (!current) return;
     const copy = { ...current, id: `${current.id}-copy`, name: `${current.name} (copy)` };
     const res = await send<{ ok: boolean; error?: string }>({ t: 'saveAdapter', def: copy });
-    if (res.ok) {
+    if (res?.ok) {
       setSelectedId(copy.id);
       await load();
     }
@@ -634,8 +756,8 @@ function AdapterPanel(): JSX.Element {
       </div>
       {error ? <div className="error-box mono small">{error}</div> : null}
       <p className="dim small">
-        Selectors are live-verified against the site on the next turn. Bundled presets: qwen-chat,
-        deepseek-chat, chatgpt, universal-fallback.
+        Saving hot-reloads active tabs immediately. Bundled presets: qwen-chat, deepseek-chat,
+        chatgpt, universal-fallback.
       </p>
     </section>
   );

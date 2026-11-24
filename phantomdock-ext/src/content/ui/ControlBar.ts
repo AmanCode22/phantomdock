@@ -1,5 +1,6 @@
 // Floating control bar: Attach Workspace / Attach Skill / STOP / Cooldown /
-// turn-budget status — always accessible inside the closed Shadow DOM.
+// turn-budget status / live connection dot / toast feedback — always accessible
+// inside the closed Shadow DOM.
 
 import type { SkillSummary } from '../../shared/protocol';
 import type { GuardSummary } from '../guards-runtime';
@@ -9,15 +10,23 @@ export interface ControlBarCallbacks {
   onAttachWorkspace: () => void;
   onAttachSkill: (name: string) => void;
   onStopToggle: (stopped: boolean) => void;
+  onCancelBatch?: () => void;
 }
 
 export class ControlBar {
   private el: HTMLDivElement;
+  private toastEl: HTMLDivElement;
+  private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  private dotEl: HTMLSpanElement;
   private stopBtn: HTMLButtonElement;
+  private cancelBtn: HTMLButtonElement;
   private statusEl: HTMLSpanElement;
   private budgetEl: HTMLSpanElement;
   private skillMenu: HTMLDivElement;
   private stopped = false;
+  private bound = false;
+  private boundLabel = '';
+  private streaming = false;
   private lastGuard: GuardSummary | null = null;
 
   constructor(
@@ -25,7 +34,10 @@ export class ControlBar {
     private skills: SkillSummary[],
     bound: boolean,
   ) {
+    this.bound = bound;
     const root = getShadowRoot();
+
+    this.dotEl = h('span', { class: `dot ${bound ? 'on' : ''}` });
     this.stopBtn = h('button', {
       class: 'btn danger',
       text: 'STOP',
@@ -33,13 +45,24 @@ export class ControlBar {
         this.stopped = !this.stopped;
         this.callbacks.onStopToggle(this.stopped);
         this.renderStop();
+        this.renderStatus();
       },
+    });
+    this.cancelBtn = h('button', {
+      class: 'btn',
+      text: 'Cancel Turn',
+      style: 'display:none;',
+      onclick: () => this.callbacks.onCancelBatch?.(),
     });
     this.statusEl = h('span', { class: 'dim', text: bound ? 'ready' : 'not paired' });
     this.budgetEl = h('span', { class: 'dim mono' });
     this.skillMenu = h('div', {
       class: 'panel',
-      style: 'position:absolute;bottom:44px;right:0;min-width:260px;padding:8px;display:none;',
+      style: 'position:absolute;bottom:48px;right:0;min-width:260px;max-height:260px;overflow-y:auto;padding:8px;display:none;pointer-events:auto;',
+    });
+    this.toastEl = h('div', {
+      class: 'toast',
+      style: 'display:none;pointer-events:auto;',
     });
 
     const skillBtn = h('button', {
@@ -61,20 +84,22 @@ export class ControlBar {
       'div',
       {
         class: 'panel',
-        style: 'position:relative;display:flex;gap:8px;padding:8px 10px;align-items:center;',
+        style: 'position:relative;display:flex;gap:8px;padding:8px 10px;align-items:center;pointer-events:auto;',
       },
       [
+        this.dotEl,
         wsBtn,
         skillBtn,
+        this.cancelBtn,
         this.stopBtn,
-        h('div', { class: 'grow' }),
         this.budgetEl,
         this.statusEl,
         this.skillMenu,
       ],
     );
-    root.float.appendChild(this.el);
+    root.float.append(this.toastEl, this.el);
     this.renderStop();
+    this.renderStatus();
   }
 
   private renderStop(): void {
@@ -87,7 +112,12 @@ export class ControlBar {
     this.skillMenu.replaceChildren();
     if (!this.skills.length) {
       this.skillMenu.append(
-        h('div', { class: 'dim', text: 'No skills discovered by pdock.' }),
+        h('div', {
+          class: 'dim',
+          text: this.bound
+            ? 'No skills discovered by pdock.'
+            : 'Pair with pdock first to load skills.',
+        }),
       );
       return;
     }
@@ -97,7 +127,7 @@ export class ControlBar {
           'button',
           {
             class: 'btn ghost',
-            style: 'display:block;width:100%;text-align:left;margin:2px 0;',
+            style: 'display:block;width:100%;text-align:left;margin:2px 0;white-space:normal;',
             onclick: () => {
               this.skillMenu.style.display = 'none';
               this.callbacks.onAttachSkill(s.name);
@@ -112,32 +142,89 @@ export class ControlBar {
     }
   }
 
-  setBound(bound: boolean, cwd?: string): void {
-    this.statusEl.textContent = bound ? `pdock: ${cwd ?? ''}` : 'not paired';
+  private renderStatus(): void {
+    const g = this.lastGuard;
+    if (g?.stopped) {
+      this.dotEl.className = 'dot off';
+      this.statusEl.textContent = 'STOPPED';
+      return;
+    }
+    if (!this.bound) {
+      this.dotEl.className = 'dot';
+      this.statusEl.textContent = 'not paired';
+      return;
+    }
+
+    const parts: string[] = [];
+    if (g && g.cooldownRemainingMs > 0) {
+      const s = Math.ceil(g.cooldownRemainingMs / 1000);
+      parts.push(`cooldown ${Math.floor(s / 60)}m${s % 60}s`);
+    } else if (g?.blocked) {
+      parts.push(humanReason(g.blocked));
+    } else if (this.streaming) {
+      parts.push('streaming…');
+    } else {
+      parts.push(this.boundLabel ? `pdock ${this.boundLabel}` : 'ready');
+    }
+
+    this.dotEl.className =
+      g && (g.cooldownRemainingMs > 0 || g.blocked) ? 'dot warn' : 'dot on';
+    this.statusEl.textContent = parts.join(' · ');
+  }
+
+  setBound(bound: boolean, label?: string): void {
+    this.bound = bound;
+    if (label !== undefined) {
+      this.boundLabel = label;
+    } else if (!bound) {
+      this.boundLabel = '';
+    }
+    this.renderStatus();
+  }
+
+  setSkills(skills: SkillSummary[]): void {
+    this.skills = skills;
+    if (this.skillMenu.style.display !== 'none') {
+      this.renderSkillMenu();
+    }
+  }
+
+  setBatchActive(active: boolean): void {
+    this.cancelBtn.style.display = active ? 'inline-block' : 'none';
   }
 
   setGuardSummary(g: GuardSummary): void {
     this.lastGuard = g;
-    const parts: string[] = [];
-    if (g.stopped) parts.push('STOPPED');
-    if (g.cooldownRemainingMs > 0) {
-      const s = Math.ceil(g.cooldownRemainingMs / 1000);
-      parts.push(`cooldown ${Math.floor(s / 60)}m${s % 60}s`);
+    if (g.stopped !== this.stopped) {
+      this.stopped = g.stopped;
+      this.renderStop();
     }
-    if (g.blocked && !g.stopped && g.cooldownRemainingMs <= 0) {
-      parts.push(humanReason(g.blocked));
-    }
-    this.statusEl.textContent = parts.length ? parts.join(' · ') : 'ready';
-    this.budgetEl.textContent = `${g.consecutiveAutoTurns} consecutive · ${g.hourlyTurns}/h`;
+    this.budgetEl.textContent =
+      this.bound && (g.consecutiveAutoTurns > 0 || g.hourlyTurns > 0)
+        ? `${g.consecutiveAutoTurns}t · ${g.hourlyTurns}/h`
+        : '';
+    this.renderStatus();
   }
 
   setStreamingBadge(active: boolean): void {
-    if (active && this.lastGuard && !this.lastGuard.stopped && this.lastGuard.cooldownRemainingMs <= 0) {
-      this.statusEl.textContent = 'receiving tool call…';
-    }
+    this.streaming = active;
+    this.renderStatus();
+  }
+
+  showToast(message: string, kind: 'info' | 'ok' | 'err' = 'info', durationMs = 3500): void {
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastEl.textContent = message;
+    this.toastEl.className = kind === 'info' ? 'toast' : `toast ${kind}`;
+    this.toastEl.style.display = 'block';
+    this.toastTimer = setTimeout(() => {
+      this.toastEl.style.display = 'none';
+      this.toastTimer = null;
+    }, durationMs);
   }
 
   remove(): void {
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastEl.remove();
     this.el.remove();
   }
 }

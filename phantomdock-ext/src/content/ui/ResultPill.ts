@@ -1,5 +1,5 @@
 // <tool_result> user bubbles collapse into a compact expandable pill, keeping
-// native file attachment chips visible.
+// a non-zero bounding box on the bubble so anchorOver never collapses to (0,0).
 
 import { anchorOver, getShadowRoot, h } from './shadow';
 
@@ -10,21 +10,17 @@ export function collapseToolResultBubble(
 ): { pill: HTMLElement; restore: () => void; expand: (v: boolean) => void } {
   const root = getShadowRoot();
 
-  // Non-destructive CSS masking of the raw XML (no React node surgery).
-  const maskTargets = Array.from(userEl.querySelectorAll<HTMLElement>('p, div, span')).filter(
-    (el) => el.textContent?.includes('<tool_result'),
-  );
-  const targets = maskTargets.length ? maskTargets : [userEl];
-  const savedStyles = targets.map((el) => el.style.cssText);
+  const savedUserCss = userEl.style.cssText;
   const applyMask = (): void => {
-    for (const el of targets) {
-      el.style.display = 'none';
-    }
+    // Keep a 32px collapsed height with hidden overflow so userEl retains its
+    // true layout coordinates and never teleports the pill to (8, 8).
+    userEl.style.maxHeight = '32px';
+    userEl.style.minHeight = '32px';
+    userEl.style.overflow = 'hidden';
+    userEl.style.opacity = '0.04';
   };
   const clearMask = (): void => {
-    targets.forEach((el, i) => {
-      el.style.cssText = savedStyles[i];
-    });
+    userEl.style.cssText = savedUserCss;
   };
   applyMask();
 
@@ -34,12 +30,13 @@ export function collapseToolResultBubble(
           toolNames.length > 3 ? '…' : ''
         }`
       : 'Tool Results — click to inspect';
+
   const pill = h(
     'button',
     {
       class: 'panel',
       style:
-        'position:absolute;pointer-events:auto;padding:5px 10px;border-radius:999px;font-size:11px;cursor:pointer;display:flex;gap:6px;align-items:center;',
+        'position:fixed;pointer-events:auto;padding:5px 10px;border-radius:999px;font-size:11px;cursor:pointer;display:flex;gap:6px;align-items:center;',
     },
     [h('span', { text: '⇪' }), h('span', { text: label })],
   );

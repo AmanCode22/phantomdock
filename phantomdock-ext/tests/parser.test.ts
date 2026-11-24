@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  balancedObjects,
   composeTurnReply,
   extractResultIds,
+  extractResultNames,
   parsePdockCalls,
   renderToolResult,
 } from '../src/content/parser';
@@ -57,6 +59,13 @@ describe('parsePdockCalls', () => {
     expect(out.invalid).toBe(2);
   });
 
+  it('ignores manifest placeholder TOOL_NAME', () => {
+    const text = '```pdock_call\n{"id":"call_01","name":"TOOL_NAME","args":{}}\n```';
+    const out = parsePdockCalls(text);
+    expect(out.calls.length).toBe(0);
+    expect(out.invalid).toBe(1);
+  });
+
   it('tolerates trailing prose after the last fence', () => {
     const text =
       '```pdock_call\n{"id":"c1","name":"list_dir","args":{}}\n```\nI will now wait for results before continuing.';
@@ -82,6 +91,13 @@ describe('parsePdockCalls', () => {
     const text = '```pdock_call\n{"id":"c1","name":"list_dir","args":{}}\n```';
     const out = parsePdockCalls(text);
     expect(out.calls.length).toBe(1);
+  });
+
+  it('extracts balanced JSON objects from rendered code blocks with UI junk', () => {
+    const raw = 'pdock_callCopyDownload{"id":"c1","name":"read_file","args":{"path":"a/b.ts"}}';
+    expect(balancedObjects(raw)).toEqual([
+      '{"id":"c1","name":"read_file","args":{"path":"a/b.ts"}}',
+    ]);
   });
 });
 
@@ -162,10 +178,10 @@ describe('renderToolResult / composeTurnReply', () => {
     expect(reply.trim().endsWith('</tool_results>')).toBe(true);
   });
 
-  it('extracts result ids for history hydration', () => {
-    const ids = extractResultIds(
-      '<tool_result id="call_01" name="read_file" status="ok">x</tool_result>\n<tool_result id="call_02" name="list_dir" status="ok">y</tool_result>',
-    );
-    expect(ids).toEqual(['call_01', 'call_02']);
+  it('extracts result ids and names for history hydration and pills', () => {
+    const xml =
+      '<tool_result id="call_01" name="read_file" status="ok">x</tool_result>\n<tool_result id="call_02" name="list_dir" status="ok">y</tool_result>';
+    expect(extractResultIds(xml)).toEqual(['call_01', 'call_02']);
+    expect(extractResultNames(xml)).toEqual(['read_file', 'list_dir']);
   });
 });

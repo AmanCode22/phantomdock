@@ -9,14 +9,14 @@
   "selectors": {
     "chatContainer": "body",
     "messageList": "main, [class*='chat'], [class*='message'], [role='log'], body",
-    "userMessage": "[class*='user'], [data-role='user']",
-    "assistantMessage": "[class*='assistant'], [class*='bot'], [class*='ai'], [data-role='assistant']",
-    "messageMarkdownBody": "[class*='markdown'], [class*='prose'], [class*='message-content'], article, div",
-    "streamingIndicator": "button[aria-label*='Stop'], [class*='stop'], [class*='typing'], [class*='generating']",
+    "userMessage": "[data-message-author-role='user'], [data-role='user'], [class*='user-message']",
+    "assistantMessage": "[data-message-author-role='assistant'], [data-role='assistant'], [class*='assistant-message'], [class*='bot-message']",
+    "messageMarkdownBody": "[class*='markdown'], [class*='prose'], [class*='message-content'], article",
+    "streamingIndicator": "button[aria-label*='Stop'], [data-testid='stop-button'], [class*='stop-button'], [class*='generating']",
     "inputBox": "textarea, [contenteditable='true']",
-    "sendButton": "button[type='submit'], button[aria-label*='end'], button[aria-label*='Send'], button[class*='send']",
+    "sendButton": "button[type='submit'], button[aria-label*='Send'], button[class*='send']",
     "pillMountAnchor": "form, [class*='input'], body",
-    "rateLimitBanner": "[class*='rate-limit'], [class*='error'], [role='alert']",
+    "rateLimitBanner": "[class*='rate-limit'], [class*='usage-limit'], [class*='quota-exceeded']",
     "challengeBanner": "iframe[src*='turnstile'], iframe[src*='arkoselabs'], iframe[src*='hcaptcha'], [class*='captcha']"
   },
   "fileUpload": {

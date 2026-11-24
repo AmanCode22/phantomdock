@@ -75,6 +75,27 @@ header .dot.off {
   background: var(--err);
 }
 
+nav.tabs {
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 4px;
+}
+nav.tabs button {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+nav.tabs button.active {
+  background: var(--panel);
+  color: var(--fg);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
 section {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -202,6 +223,17 @@ textarea:focus {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
+}
+
+.diag-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 8px;
+  margin-top: 8px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
 }
 
 label.check {

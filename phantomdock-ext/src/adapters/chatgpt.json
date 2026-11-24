@@ -8,16 +8,16 @@
   ],
   "enabled": true,
   "selectors": {
-    "chatContainer": "main, [class*='react-scroll-to-bottom']",
+    "chatContainer": "main, [class*='react-scroll-to-bottom'], body",
     "messageList": "[class*='react-scroll-to-bottom'], main",
-    "userMessage": "[data-message-author-role='user'], div[data-talvt-turn-state]:has([data-conversation-role='user']), [class*='group/user-message']",
+    "userMessage": "[data-message-author-role='user'], div[class*='group/user-message']",
     "assistantMessage": "[data-message-author-role='assistant'], div[data-talvt-turn-state]:has([data-conversation-role='assistant'])",
     "messageMarkdownBody": ".markdown, [class*='markdown']",
-    "streamingIndicator": "div[data-talvt-turn-state]:not([data-talvt-turn-state='complete']), button[aria-label*='Stop'], [data-testid='stop-button']",
+    "streamingIndicator": "button[data-testid='stop-button'], button[aria-label*='Stop'], .result-streaming, div[data-talvt-turn-state]:not([data-talvt-turn-state='complete'])",
     "inputBox": "#prompt-textarea, div.ProseMirror[contenteditable='true'], textarea, [contenteditable='true']",
-    "sendButton": "button[data-testid='send-button'], button[aria-label*='Send']",
+    "sendButton": "button[data-testid='send-button'], button[aria-label*='Send prompt'], button[aria-label*='Send']",
     "pillMountAnchor": "form, [class*='input-container']",
-    "rateLimitBanner": "[class*='rate-limit'], [class*='usage-limit'], [class*='error-toast']",
+    "rateLimitBanner": "[class*='rate-limit'], [class*='usage-limit']",
     "challengeBanner": "iframe[src*='turnstile'], iframe[src*='arkoselabs'], iframe[src*='hcaptcha'], [class*='captcha']"
   },
   "fileUpload": {

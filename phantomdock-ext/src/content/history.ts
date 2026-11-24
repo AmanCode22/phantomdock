@@ -1,57 +1,75 @@
 // History hydration: on thread reload, pdock_call blocks whose ids match a
-// later <tool_result id="..."> render as collapsed Executed cards (never
-// re-run); unresolved ones render as Awaiting Approval with a stale badge.
+// later <tool_result id="..."> are recorded so they never re-run, and their
+// raw fenced blocks are non-destructively masked.
 
 import type { AdapterDef } from '../adapters/schema';
-import { extractResultIds, parsePdockCalls } from './parser';
-import { ToolCard } from './ui/ToolCard';
+import {
+  extractResultIds,
+  looksLikePdockCallBlock,
+  parsePdockCallsFromElement,
+} from './parser';
 
-export function hydrateHistory(adapter: AdapterDef): void {
+export function hydrateHistory(adapter: AdapterDef): { firedKeys: string[] } {
+  const firedKeys: string[] = [];
   const resultIds = new Set<string>();
-  const userEls = document.querySelectorAll<HTMLElement>(adapter.selectors.userMessage);
-  for (const u of userEls) {
-    for (const id of extractResultIds(u.textContent ?? '')) resultIds.add(id);
+
+  try {
+    const userEls = document.querySelectorAll<HTMLElement>(adapter.selectors.userMessage);
+    for (const u of userEls) {
+      for (const id of extractResultIds(u.textContent ?? '')) resultIds.add(id);
+    }
+  } catch {
+    /* ignore invalid selector */
   }
 
-  const assistantEls = document.querySelectorAll<HTMLElement>(adapter.selectors.assistantMessage);
+  let assistantEls: NodeListOf<HTMLElement>;
+  try {
+    assistantEls = document.querySelectorAll<HTMLElement>(adapter.selectors.assistantMessage);
+  } catch {
+    return { firedKeys };
+  }
+
   for (const el of assistantEls) {
-    const body = el.querySelector<HTMLElement>(adapter.selectors.messageMarkdownBody) ?? el;
-    const parsed = parsePdockCalls(body.textContent ?? '');
+    const parsed = parsePdockCallsFromElement(
+      el,
+      adapter.selectors.messageMarkdownBody,
+      adapter.selectors.userMessage,
+    );
     if (!parsed.hasCalls) continue;
     for (const call of parsed.calls) {
-      const card = new ToolCard(
-        call,
-        null,
-        { onApprove: () => undefined, onReject: () => undefined, onTrustSession: () => undefined },
-        el,
-        !resultIds.has(call.id),
-      );
-      if (resultIds.has(call.id)) {
-        card.setExecutedSummary(`${call.name} — resolved in a previous turn`);
-      }
+      firedKeys.push(callKey(call));
     }
-    // Non-destructively mask the raw pdock_call fence inside this message.
-    maskRawCallBlocks(body);
+    // Only mask historical blocks that were already executed in a previous turn.
+    if (parsed.calls.some((c) => resultIds.has(c.id))) {
+      maskRawCallBlocks(el);
+    }
+  }
+  return { firedKeys };
+}
+
+/** Stable identity for cross-batch dedupe (id, name, and exact arguments). */
+export function callKey(call: {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+}): string {
+  return `${call.id}::${call.name}::${stableArgs(call.args)}`;
+}
+
+function stableArgs(args: Record<string, unknown>): string {
+  try {
+    return JSON.stringify(args);
+  } catch {
+    return String(args);
   }
 }
 
 /** Hide raw ```pdock_call pre blocks via inline CSS (no node removal). */
-export function maskRawCallBlocks(bodyEl: HTMLElement): void {
-  const pres = bodyEl.querySelectorAll<HTMLElement>('pre');
+export function maskRawCallBlocks(containerEl: HTMLElement): void {
+  const pres = containerEl.querySelectorAll<HTMLElement>('pre');
   for (const pre of pres) {
-    if (looksLikePdockCall(pre.textContent ?? '')) {
+    if (looksLikePdockCallBlock(pre)) {
       pre.style.display = 'none';
     }
-  }
-}
-
-function looksLikePdockCall(text: string): boolean {
-  try {
-    const json = text.trim();
-    if (!json.startsWith('{')) return false;
-    const v = JSON.parse(json) as Record<string, unknown>;
-    return typeof v.id === 'string' && typeof v.name === 'string';
-  } catch {
-    return false;
   }
 }
