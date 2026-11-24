@@ -77,24 +77,20 @@ pub fn list_skills(args: &Value, ctx: &ToolContext<'_>) -> Result<ToolOk, ToolEr
     let start = (page - 1) * page_size;
     let end = (start + page_size).min(total);
     let mut out = format!(
-        "Skills (page {page}/{total_pages}, showing {}-{end} of {total}):
-",
+        "Skills (page {page}/{total_pages}, showing {}-{end} of {total}):\n",
         start + 1
     );
     for skill in &filtered[start..end] {
-        out.push_str(&format!("- {}: {}
-", skill.name, skill.description));
+        out.push_str(&format!("- {}: {}\n", skill.name, skill.description));
     }
     if page < total_pages {
         let next = page + 1;
         match &query {
             Some(q) => out.push_str(&format!(
-                "
-Call `list_skills` with {{"page":{next},"page_size":{page_size},"query":"{q}"}} for the next page."
+                "\nCall `list_skills` with {{\"page\":{next},\"page_size\":{page_size},\"query\":\"{q}\"}} for the next page."
             )),
             None => out.push_str(&format!(
-                "
-Call `list_skills` with {{"page":{next},"page_size":{page_size}}} for the next page."
+                "\nCall `list_skills` with {{\"page\":{next},\"page_size\":{page_size}}} for the next page."
             )),
         }
     }

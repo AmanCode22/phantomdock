@@ -325,18 +325,15 @@ fn format_mcp_tool_page(
     let start = (page - 1) * page_size;
     let end = (start + page_size).min(total);
     let mut out = format!(
-        "MCP Tools (page {page}/{total_pages}, showing {}-{end} of {total}):
-",
+        "MCP Tools (page {page}/{total_pages}, showing {}-{end} of {total}):\n",
         start + 1
     );
     for (_, fq, desc, schema) in &entries[start..end] {
         if include_schema {
             let compact = serde_json::to_string(schema).unwrap_or_else(|_| "{}".into());
-            out.push_str(&format!("- {fq}: {desc} | schema: {compact}
-"));
+            out.push_str(&format!("- {fq}: {desc} | schema: {compact}\n"));
         } else {
-            out.push_str(&format!("- {fq}: {desc}
-"));
+            out.push_str(&format!("- {fq}: {desc}\n"));
         }
     }
     if page < total_pages {
@@ -351,8 +348,9 @@ fn format_mcp_tool_page(
             next_args.insert("query".into(), Value::from(q));
         }
         let next_json = Value::Object(next_args).to_string();
-        out.push_str(&format!("
-Call `list_mcp_tools` with {next_json} for the next page."));
+        out.push_str(&format!(
+            "\nCall `list_mcp_tools` with {next_json} for the next page."
+        ));
     }
     Ok(ToolOk::ok(out))
 }
