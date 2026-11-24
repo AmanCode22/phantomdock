@@ -35,6 +35,72 @@ pub fn bundle(skill: &super::Skill) -> String {
     out
 }
 
+/// Handle `list_skills {"page?","page_size?","query?"}` with pagination so
+/// `<workspace_context>` stays compact even when hundreds of skills are installed.
+pub fn list_skills(args: &Value, ctx: &ToolContext<'_>) -> Result<ToolOk, ToolError> {
+    let page = crate::tools::opt_usize(args, "page")?.unwrap_or(1).max(1);
+    let page_size = crate::tools::opt_usize(args, "page_size")?
+        .unwrap_or(25)
+        .clamp(1, 100);
+    let query = crate::tools::opt_str(args, "query")?
+        .map(|q| q.trim().to_lowercase())
+        .filter(|q| !q.is_empty());
+
+    let filtered: Vec<&super::Skill> = ctx
+        .skills
+        .skills
+        .iter()
+        .filter(|s| match &query {
+            None => true,
+            Some(q) => {
+                s.name.to_lowercase().contains(q) || s.description.to_lowercase().contains(q)
+            }
+        })
+        .collect();
+
+    let total = filtered.len();
+    if total == 0 {
+        return Ok(ToolOk::ok(match &query {
+            Some(q) => format!("No skills matched query '{q}'."),
+            None => "No skills installed.".to_string(),
+        }));
+    }
+
+    let total_pages = total.div_ceil(page_size);
+    if page > total_pages {
+        return Err(ToolError::new(
+            "INVALID_ARGS",
+            format!("page {page} out of range 1..={total_pages} ({total} matching skills)"),
+        ));
+    }
+
+    let start = (page - 1) * page_size;
+    let end = (start + page_size).min(total);
+    let mut out = format!(
+        "Skills (page {page}/{total_pages}, showing {}-{end} of {total}):
+",
+        start + 1
+    );
+    for skill in &filtered[start..end] {
+        out.push_str(&format!("- {}: {}
+", skill.name, skill.description));
+    }
+    if page < total_pages {
+        let next = page + 1;
+        match &query {
+            Some(q) => out.push_str(&format!(
+                "
+Call `list_skills` with {{"page":{next},"page_size":{page_size},"query":"{q}"}} for the next page."
+            )),
+            None => out.push_str(&format!(
+                "
+Call `list_skills` with {{"page":{next},"page_size":{page_size}}} for the next page."
+            )),
+        }
+    }
+    Ok(ToolOk::ok(out))
+}
+
 /// Handle `activate_skill {"name", "part?", "mode?"}`.
 ///
 /// - upload mode (default): returns the full bundle for the extension to attach
@@ -333,5 +399,48 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(escape.code, "NOT_FOUND"); // ../.. escapes skill root and does not exist
+    }
+
+    #[test]
+    fn list_skills_paginates_and_filters() {
+        let tmp = TempDir::new().unwrap();
+        let skills: Vec<Skill> = (1..=5)
+            .map(|i| Skill {
+                name: format!("skill-{i:02}"),
+                description: if i == 3 {
+                    "special rust helper".into()
+                } else {
+                    format!("desc {i}")
+                },
+                dir: tmp.path().to_path_buf(),
+                content: "body".into(),
+            })
+            .collect();
+        let index = SkillsIndex { skills };
+        let sb = Sandbox::new(tmp.path().to_path_buf(), vec![]).unwrap();
+        let cfg = Config::default();
+        let mcp = crate::mcp::Manager::empty();
+        let ctx = ToolContext {
+            call_id: "c".into(),
+            sandbox: &sb,
+            config: &cfg,
+            skills: &index,
+            mcp: &mcp,
+            shell_enabled: false,
+        };
+
+        let p1 = list_skills(&json!({"page": 1, "page_size": 2}), &ctx).unwrap();
+        assert!(p1.text.contains("page 1/3"));
+        assert!(p1.text.contains("skill-01"));
+        assert!(p1.text.contains("skill-02"));
+        assert!(!p1.text.contains("skill-03"));
+        assert!(p1.text.contains(r#""page":2"#));
+
+        let filtered = list_skills(&json!({"query": "rust"}), &ctx).unwrap();
+        assert!(filtered.text.contains("skill-03"));
+        assert!(!filtered.text.contains("skill-01"));
+
+        let oob = list_skills(&json!({"page": 9, "page_size": 2}), &ctx).unwrap_err();
+        assert_eq!(oob.code, "INVALID_ARGS");
     }
 }

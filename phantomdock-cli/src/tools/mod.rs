@@ -188,6 +188,7 @@ impl Registry {
             "edit_file" => fs::edit_file(args, ctx),
             "list_dir" => fs::list_dir(args, ctx),
             "search_files" => fs::search_files(args, ctx),
+            "list_skills" => crate::skills::loader::list_skills(args, ctx),
             "activate_skill" => crate::skills::loader::activate(args, ctx),
             "read_skill_resource" => crate::skills::loader::read_resource(args, ctx),
             "run_shell" => {
@@ -262,6 +263,12 @@ pub fn builtin_tool_infos(shell_enabled: bool) -> Vec<ToolInfo> {
             readonly: true,
             description: "Regex search across workspace files, returning file:line:text matches."
                 .into(),
+        },
+        ToolInfo {
+            name: "list_skills".into(),
+            category: ToolCategory::Skill,
+            readonly: true,
+            description: "List installed skills with pagination (page, page_size) and optional query filter.".into(),
         },
         ToolInfo {
             name: "activate_skill".into(),
@@ -339,7 +346,7 @@ pub fn build_workspace_context(
     s.push_str("Rules:\n");
     s.push_str("- Never fabricate tool outputs.\n");
     s.push_str("- You may emit multiple `pdock_call` blocks in one turn; all results will be returned together in one reply.\n");
-    s.push_str("- When a request matches an installed skill in `<available_skills>`, call `activate_skill` first. If delivered as an uploaded `*-skill.md` file, follow it strictly. If delivered inline in parts (`part 1/N`), call `activate_skill` with `{\"name\":\"...\",\"part\":2}` to read further parts as needed.\n");
+    s.push_str("- Skill names are not pre-listed to keep prompts compact. Call `list_skills` (supports `page`, `page_size`, `query`) to discover installed skills, then `activate_skill` to load one. If delivered inline in parts (`part 1/N`), call `activate_skill` with `{\"name\":\"...\",\"part\":2}` for further parts.\n");
     s.push_str("- If a tool result was offloaded to `.phantomdock/outputs/...`, use `read_file` with `start_line` and `end_line` to inspect targeted slices.\n\n");
     s.push_str("Available Tools:\n");
     let mut n = 1;
@@ -349,6 +356,7 @@ pub fn build_workspace_context(
         r#"edit_file: {"path":"string","old_str":"string","new_str":"string"} — old_str must match exactly once"#,
         r#"list_dir: {"path?":"string","depth?":"number"}"#,
         r#"search_files: {"pattern":"string","path?":"string"}"#,
+        r#"list_skills: {"page?":"number","page_size?":"number","query?":"string"}"#,
         r#"activate_skill: {"name":"string","part?":"number","mode?":"upload|inline"}"#,
         r#"read_skill_resource: {"skill_name":"string","resource_path":"string","start_line?":"number","end_line?":"number"}"#,
     ] {
@@ -366,13 +374,14 @@ pub fn build_workspace_context(
         s.push_str(&format!("{n}. {name}: {compact}\n"));
         n += 1;
     }
-    s.push_str("\n<available_skills>\n");
-    if skills.skills.is_empty() {
+    let skill_count = skills.skills.len();
+    s.push_str(&format!("\n<available_skills count=\"{skill_count}\">\n"));
+    if skill_count == 0 {
         s.push_str("- (none installed)\n");
     } else {
-        for skill in &skills.skills {
-            s.push_str(&format!("- {}: {}\n", skill.name, skill.description));
-        }
+        s.push_str(&format!(
+            "{skill_count} skills installed (omitted from manifest to stay within chat character limits). Call `list_skills` with pagination (`page`, `page_size`) or `query` to browse them.\n"
+        ));
     }
     s.push_str("</available_skills>\n</workspace_context>");
     s
@@ -400,6 +409,20 @@ mod tests {
         assert!(xml.contains("(none installed)"));
         assert!(!xml.contains("run_shell"));
         assert!(xml.ends_with("</workspace_context>"));
+
+        assert!(xml.contains("list_skills"));
+
+        let populated = SkillsIndex {
+            skills: vec![crate::skills::Skill {
+                name: "secret-skill-name".into(),
+                description: "should not be inlined".into(),
+                dir: Path::new("/w").to_path_buf(),
+                content: "body".into(),
+            }],
+        };
+        let xml_pop = build_workspace_context(false, &McpManager::empty(), &populated, Path::new("/w"));
+        assert!(xml_pop.contains("count=\"1\""));
+        assert!(!xml_pop.contains("secret-skill-name"));
 
         let xml_shell =
             build_workspace_context(true, &McpManager::empty(), &index, Path::new("/w"));

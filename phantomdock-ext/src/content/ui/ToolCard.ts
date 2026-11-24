@@ -259,7 +259,7 @@ export class ToolCard {
 function guessCategory(name: string): string {
   if (name.startsWith('mcp__')) return 'mcp';
   if (name === 'run_shell') return 'shell';
-  if (name === 'activate_skill' || name === 'read_skill_resource') return 'skill';
+  if (name === 'list_skills' || name === 'activate_skill' || name === 'read_skill_resource') return 'skill';
   return 'fs';
 }
 
