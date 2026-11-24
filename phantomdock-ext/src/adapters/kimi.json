@@ -16,7 +16,7 @@
     "messageMarkdownBody": ".markdown-container, .markdown, [class*='markdown']",
     "streamingIndicator": ".send-button-container.stop, .send-button-container.loading, .stop-btn, [class*='stop-btn'], [class*='stop-button'], button[aria-label*='Stop']",
     "inputBox": ".chat-input-editor[contenteditable='true'], div[data-lexical-editor='true'][contenteditable='true'], .chat-input [contenteditable='true'], textarea, [contenteditable='true']",
-    "sendButton": ".send-button-container, .send-button, [class*='send-button'], button[type='submit'], button[aria-label*='Send']",
+    "sendButton": ".send-button-container button, .send-button-container .send-button, .send-button, .send-button-container, [class*='send-button'], button[type='submit'], button[aria-label*='Send']",
     "pillMountAnchor": ".chat-editor, .chat-input-container, .chat-input, form",
     "rateLimitBanner": "[class*='rate-limit'], [class*='quota-exceeded'], [class*='limit-tip']",
     "challengeBanner": "iframe[src*='turnstile'], iframe[src*='hcaptcha'], iframe[src*='recaptcha'], [class*='captcha']"

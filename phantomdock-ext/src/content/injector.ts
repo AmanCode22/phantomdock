@@ -211,14 +211,23 @@ export function insertText(el: InputEl, payload: string, clearBeforeInsert: bool
     const sel = window.getSelection();
     if (sel) {
       const range = document.createRange();
-      range.selectNodeContents(el);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }
-    try {
-      document.execCommand('delete', false);
-    } catch {
-      /* ignore */
+      if (existing.length > 0) {
+        range.selectNodeContents(el);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        try {
+          document.execCommand('delete', false);
+        } catch {
+          /* ignore */
+        }
+      } else {
+        // Keep selection anchored inside the first paragraph (critical for Lexical).
+        const anchorTarget = el.querySelector('p') ?? el;
+        range.selectNodeContents(anchorTarget);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
     }
 
     // Strategy 1: synthetic paste (natively handled by ProseMirror, TipTap & Lexical).
@@ -230,10 +239,34 @@ export function insertText(el: InputEl, payload: string, clearBeforeInsert: bool
           clipboardData: dt,
           bubbles: true,
           cancelable: true,
+          composed: true,
         }),
       );
     } catch {
       /* DataTransfer/ClipboardEvent unavailable */
+    }
+
+    if (hasPayloadText(el, payload)) {
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
+
+    // Strategy 1b: Lexical/Slate beforeinput with DataTransfer (insertFromPaste).
+    try {
+      const dt = new DataTransfer();
+      dt.setData('text/plain', finalText);
+      el.dispatchEvent(
+        new InputEvent('beforeinput', {
+          inputType: 'insertFromPaste',
+          data: finalText,
+          dataTransfer: dt,
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+        }),
+      );
+    } catch {
+      /* InputEvent dataTransfer unsupported */
     }
 
     if (hasPayloadText(el, payload)) {
@@ -283,11 +316,18 @@ export function insertText(el: InputEl, payload: string, clearBeforeInsert: bool
 const DISABLED_CLASS_RE = /\b(?:disabled|ds-button--disabled|is-disabled|ant-btn-disabled)\b/;
 
 export function isSendDisabled(btn: HTMLElement): boolean {
-  return (
+  if (
     ((btn instanceof HTMLButtonElement || btn instanceof HTMLInputElement) && btn.disabled) ||
     btn.getAttribute('aria-disabled') === 'true' ||
     DISABLED_CLASS_RE.test(btn.className || '')
-  );
+  ) {
+    return true;
+  }
+  const container = btn.closest('.send-button-container');
+  if (container && DISABLED_CLASS_RE.test(container.className || '')) {
+    return true;
+  }
+  return false;
 }
 
 /** Wait until a visible, enabled send button is ready (rAF loop with timeout). */
@@ -350,6 +390,7 @@ export function pressEnter(el: InputEl): void {
     which: 13,
     bubbles: true,
     cancelable: true,
+    composed: true,
   };
   target.dispatchEvent(new KeyboardEvent('keydown', opts));
   target.dispatchEvent(new KeyboardEvent('keypress', opts));
