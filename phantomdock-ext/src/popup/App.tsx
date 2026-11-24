@@ -757,7 +757,7 @@ function AdapterPanel(): JSX.Element {
       {error ? <div className="error-box mono small">{error}</div> : null}
       <p className="dim small">
         Saving hot-reloads active tabs immediately. Bundled presets: qwen-chat, deepseek-chat,
-        chatgpt, gemini, universal-fallback.
+        chatgpt, gemini, kimi, universal-fallback.
       </p>
     </section>
   );

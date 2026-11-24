@@ -54,8 +54,8 @@ for (const target of targets) {
     failures++;
   } else {
     const jsons = readdirSync(adaptersDir).filter((f) => f.endsWith('.json'));
-    if (jsons.length < 5) {
-      console.error(`[${target}] expected 5 bundled adapters, found ${jsons.length}`);
+    if (jsons.length < 6) {
+      console.error(`[${target}] expected 6 bundled adapters, found ${jsons.length}`);
       failures++;
     }
   }
