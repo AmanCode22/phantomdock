@@ -375,7 +375,6 @@ pub fn build_workspace_context(
         s.push_str(&format!(
             "{n}. run_shell: {{\"command\":\"string\",\"timeout_ms?\":\"number\"}} — requires manual approval\n"
         ));
-        n += 1;
     }
     let mcp_statuses = mcp.statuses();
     let total_mcp_tools: usize = mcp_statuses.iter().map(|st| st.tool_count).sum();
