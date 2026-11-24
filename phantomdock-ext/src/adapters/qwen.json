@@ -11,8 +11,8 @@
     "assistantMessage": ".qwen-chat-message-assistant, .chat-assistant-message, [data-role='assistant']",
     "messageMarkdownBody": ".qwen-markdown, .custom-qwen-markdown, .qwen-markdown-paragraph, .markdown-body",
     "streamingIndicator": "[class*='stop-button'], button[aria-label*='Stop'], [aria-label*='Stop generating'], [class*='generating'], button.send-button.stop",
-    "inputBox": "textarea.message-input-textarea, textarea, [contenteditable='true']",
-    "sendButton": "button.send-button, .chat-prompt-send-button button, .chat-prompt-send-button[role='button'], button[type='submit'], button[aria-label*='Send']",
+    "inputBox": "#chat-input, textarea#chat-input, textarea.message-input-textarea, .message-input-container textarea, .chat-input textarea, textarea[placeholder], div.ProseMirror[contenteditable='true'], textarea, [contenteditable='true']",
+    "sendButton": "#send-message-button, button.send-button, .chat-prompt-send-button button, .chat-prompt-send-button, [class*='send-button'], button[type='submit'], button[aria-label*='Send']",
     "pillMountAnchor": ".message-input-container, .chat-message-input-fixed, .message-input-wrapper",
     "rateLimitBanner": "[class*='rate-limit'], [class*='quota-exceeded']",
     "challengeBanner": "iframe[src*='turnstile'], iframe[src*='arkoselabs'], iframe[src*='hcaptcha'], [class*='captcha']"
@@ -33,7 +33,7 @@
     "autoSendAllParts": false
   },
   "inputBehavior": {
-    "inputType": "textarea",
+    "inputType": "auto",
     "submitMethod": "click",
     "submitDelayRangeMs": [400, 1400],
     "interTurnDelayRangeMs": [3000, 8000],
