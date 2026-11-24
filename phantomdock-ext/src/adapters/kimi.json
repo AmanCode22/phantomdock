@@ -3,6 +3,7 @@
   "id": "kimi",
   "name": "Kimi",
   "hostMatch": [
+    "kimi.ai",
     "kimi.com",
     "kimi.moonshot.cn"
   ],
@@ -10,10 +11,10 @@
   "selectors": {
     "chatContainer": ".chat-detail-main, .chat-content-list, main, body",
     "messageList": ".chat-content-list, .chat-detail-main",
-    "userMessage": ".segment-user, [class*='segment-user'], [class*='user-content']",
-    "assistantMessage": ".segment-assistant, [class*='segment-assistant'], [class*='assistant-content']",
+    "userMessage": ".segment-user",
+    "assistantMessage": ".segment-assistant",
     "messageMarkdownBody": ".markdown-container, .markdown, [class*='markdown']",
-    "streamingIndicator": ".stop-btn, [class*='stop-btn'], [class*='stop-button'], button[aria-label*='Stop'], .send-button-container.stop",
+    "streamingIndicator": ".send-button-container.stop, .send-button-container.loading, .stop-btn, [class*='stop-btn'], [class*='stop-button'], button[aria-label*='Stop']",
     "inputBox": ".chat-input-editor[contenteditable='true'], div[data-lexical-editor='true'][contenteditable='true'], .chat-input [contenteditable='true'], textarea, [contenteditable='true']",
     "sendButton": ".send-button-container, .send-button, [class*='send-button'], button[type='submit'], button[aria-label*='Send']",
     "pillMountAnchor": ".chat-editor, .chat-input-container, .chat-input, form",
@@ -31,7 +32,7 @@
     "fileInputSelector": "input[type='file']",
     "dropZoneSelector": ".chat-editor, .chat-input-container, .chat-input",
     "attachmentChipSelector": ".attachment-item, [class*='file-card'], [class*='attachment'], [class*='upload-item']",
-    "uploadingSpinnerSelector": "[class*='uploading'], [class*='loading'], [role='progressbar']",
+    "uploadingSpinnerSelector": "[class*='uploading'], [class*='parsing'], [role='progressbar']",
     "uploadTimeoutMs": 10000,
     "fallbackToInlineOnFailure": true
   },

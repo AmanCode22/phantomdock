@@ -44,7 +44,9 @@
         "https://gemini.google.com/*",
         "https://kimi.com/*",
         "https://www.kimi.com/*",
-        "https://kimi.moonshot.cn/*"
+        "https://kimi.moonshot.cn/*",
+        "https://kimi.ai/*",
+        "https://www.kimi.ai/*"
       ],
       "js": [
         "content.js"
