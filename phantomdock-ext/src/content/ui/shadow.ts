@@ -52,6 +52,24 @@ const STYLE = `
     color: var(--fg); border-radius: 7px; padding: 5px 10px; font-size: 12px;
     cursor: pointer; line-height: 1.2; white-space: nowrap;
   }
+  .dock-controls {
+    position: relative; display: flex; flex-wrap: wrap; gap: 6px;
+    align-items: center; padding: 7px; pointer-events: auto;
+    max-width: calc(100vw - 36px);
+  }
+  .skill-menu {
+    position: absolute; bottom: calc(100% + 8px); right: 0; padding: 9px;
+    width: min(320px, calc(100vw - 36px)); box-sizing: border-box;
+  }
+  .skill-search {
+    width: 100%; box-sizing: border-box; padding: 7px 9px; margin-bottom: 6px;
+    background: var(--bg-elev); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px;
+  }
+  .skill-results { max-height: min(210px, 40vh); overflow: auto; }
+  .btn:focus-visible, .skill-search:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
   .btn:hover { border-color: var(--accent); }
   .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
   .btn.danger { background: var(--err); color: #fff; border-color: var(--err); font-weight: 600; }

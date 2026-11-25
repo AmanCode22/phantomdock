@@ -2,33 +2,33 @@
 
 :root {
   color-scheme: light dark;
-  --bg: #f2f5f9;
+  --bg: #f5f7f6;
   --panel: #ffffff;
   --fg: #16181d;
   --fg-dim: #5c6470;
-  --border: #d8dde3;
-  --accent: #315bc8;
+  --border: #d6dfdb;
+  --accent: #14645a;
   --accent-fg: #ffffff;
   --ok: #15803d;
   --warn: #b45309;
   --err: #b91c1c;
-  --chip: #eef1f4;
+  --chip: #e9efed;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0b0f14;
-    --panel: #14181d;
+    --bg: #101714;
+    --panel: #18201d;
     --fg: #e8eaee;
     --fg-dim: #9aa3af;
-    --border: #333a42;
-    --accent: #9bb5ff;
-    --accent-fg: #06232b;
+    --border: #374540;
+    --accent: #92dfca;
+    --accent-fg: #0a302b;
     --ok: #4ade80;
     --warn: #fbbf24;
     --err: #f87171;
-    --chip: #262c33;
+    --chip: #26342f;
   }
 }
 
@@ -284,14 +284,6 @@ label.check input {
   border-bottom: none;
 }
 
-footer {
-  padding: 8px 14px 12px;
-  color: var(--fg-dim);
-  font-size: 10px;
-  display: flex;
-  justify-content: space-between;
-}
-
 .tool-list {
   margin: 10px 0;
   border-block: 1px solid var(--border);
@@ -317,3 +309,60 @@ footer {
 }
 .tool-list li .mono { overflow-wrap: anywhere; }
 .tool-list li .dim { flex: none; }
+
+body { padding-bottom: 12px; }
+header { padding: 15px 16px 12px; }
+nav.tabs {
+  padding-inline: 16px;
+  gap: 4px;
+}
+nav.tabs button {
+  border-color: transparent;
+  min-height: 34px;
+}
+nav.tabs button.active {
+  background: var(--chip);
+  border-color: transparent;
+  color: var(--accent);
+}
+section, .diagnostics {
+  margin: 10px 14px 0;
+  padding: 12px 13px;
+}
+section h2 {
+  font-size: 13px;
+  color: var(--fg);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.connection-heading { margin-top: 0; }
+.connection-heading h2 { color: var(--fg-dim); font-size: 11px; margin-bottom: 4px; }
+.connection-heading h3 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.workspace-path {
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+.connection-meta {
+  display: flex;
+  gap: 12px;
+  margin-top: 9px;
+  flex-wrap: wrap;
+}
+.workspace-actions .row { margin: 0; flex-wrap: wrap; }
+.workspace-actions p { margin: 8px 0 0; }
+.pairing-form button { flex-shrink: 0; }
+.diagnostics {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.diagnostics summary {
+  font-weight: 600;
+  cursor: pointer;
+}

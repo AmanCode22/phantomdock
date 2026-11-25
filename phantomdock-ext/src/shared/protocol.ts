@@ -200,6 +200,7 @@ export type BgRequest =
   | { t: 'saveAdapter'; def: unknown }
   | { t: 'deleteAdapter'; id: string }
   | { t: 'resetAdapter'; id: string }
+  | { t: 'attachWorkspace'; tabId: number }
   | { t: 'attachSkill'; tabId: number; name: string }
   | { t: 'injectHere'; tabId: number }
   | { t: 'stopAutomation'; tabId: number; stopped: boolean }
@@ -213,6 +214,7 @@ export interface BgStatusResponse {
   tools: ToolInfo[];
   connected: boolean;
   contentActive: boolean;
+  stopped: boolean;
 }
 
 export interface AdapterListResponse {

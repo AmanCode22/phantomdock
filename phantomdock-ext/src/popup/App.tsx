@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DEFAULT_SETTINGS,
   type BgRequest,
+  type BgStatusResponse,
   type DiagnosticReport,
   type GuardSettings,
   type HandshakeInfo,
@@ -35,6 +36,11 @@ export default function App(): JSX.Element {
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [connected, setConnected] = useState(false);
   const [contentActive, setContentActive] = useState(false);
+  const [stopped, setStopped] = useState(false);
+  const [stopPending, setStopPending] = useState(false);
+  const [workspaceMessage, setWorkspaceMessage] = useState('');
+  const [copyMessage, setCopyMessage] = useState('');
+  const statusRequest = useRef(0);
   const [daemons, setDaemons] = useState<HandshakeInfo[]>([]);
   const [scanning, setScanning] = useState(false);
   const [statusLoaded, setStatusLoaded] = useState(false);
@@ -70,15 +76,9 @@ export default function App(): JSX.Element {
 
   const refreshStatus = useCallback(async () => {
     if (tabId === null) return;
-    const res = await send<{
-      ok: boolean;
-      binding: TabBinding | null;
-      daemonInfo: HandshakeInfo | null;
-      tools: ToolInfo[];
-      skills: SkillSummary[];
-      connected: boolean;
-      contentActive: boolean;
-    }>({ t: 'getStatus', tabId });
+    const request = ++statusRequest.current;
+    const res = await send<BgStatusResponse>({ t: 'getStatus', tabId });
+    if (request !== statusRequest.current) return;
     if (res?.ok) {
       setBinding(res.binding);
       setDaemon(res.daemonInfo);
@@ -86,6 +86,7 @@ export default function App(): JSX.Element {
       setSkills(res.skills ?? []);
       setConnected(res.connected);
       setContentActive(Boolean(res.contentActive));
+      setStopped(Boolean(res.stopped));
     }
     setStatusLoaded(true);
   }, [tabId]);
@@ -110,9 +111,19 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     void refreshStatus();
-    const t = setInterval(() => void refreshStatus(), 2500);
-    return () => clearInterval(t);
-  }, [refreshStatus]);
+    if (activeTab !== 'main') return;
+    let timer: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+    const poll = async (): Promise<void> => {
+      await refreshStatus();
+      if (!cancelled) timer = setTimeout(() => void poll(), 3000);
+    };
+    timer = setTimeout(() => void poll(), 3000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [activeTab, refreshStatus]);
 
   const pair = useCallback(async () => {
     if (tabId === null || selectedPort === null || !token.trim()) {
@@ -165,6 +176,7 @@ export default function App(): JSX.Element {
   const runDiagnostics = useCallback(async () => {
     if (tabId === null) return;
     setDiagError('');
+    setCopyMessage('');
     const res = await send<{ ok: boolean; report?: DiagnosticReport; error?: string }>({
       t: 'diagnoseTab',
       tabId,
@@ -201,6 +213,35 @@ export default function App(): JSX.Element {
     await refreshStatus();
   }, [tabId, refreshStatus]);
 
+  const toggleStop = async (): Promise<void> => {
+    if (tabId === null || stopPending) return;
+    setStopPending(true);
+    setWorkspaceMessage('');
+    const res = await send<{ ok: boolean; error?: string }>({ t: 'stopAutomation', tabId, stopped: !stopped });
+    if (res?.ok) {
+      await refreshStatus();
+    } else {
+      setWorkspaceMessage(res?.error ?? 'Could not update this tab’s automation.');
+    }
+    setStopPending(false);
+  };
+
+  const attachWorkspace = async (): Promise<void> => {
+    if (tabId === null) return;
+    const res = await send<{ ok: boolean; error?: string }>({ t: 'attachWorkspace', tabId });
+    setWorkspaceMessage(res?.ok ? 'Check your chat draft for workspace context.' : res?.error ?? 'Could not reach the chat tab.');
+  };
+
+  const copyDiagnostics = async (): Promise<void> => {
+    if (!diag) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(diag, null, 2));
+      setCopyMessage('Copied.');
+    } catch {
+      setCopyMessage('Clipboard unavailable.');
+    }
+  };
+
   const bound = binding !== null && connected;
   const connectionLabel = !statusLoaded ? 'Checking…' : bound ? 'Connected' : binding ? 'Disconnected' : 'Not paired';
 
@@ -218,59 +259,73 @@ export default function App(): JSX.Element {
           </span>
         </header>
 
-      <nav className="tabs" aria-label="Popup sections">
-        <button
-          className={activeTab === 'main' ? 'active' : ''}
-          aria-pressed={activeTab === 'main'}
-          onClick={() => setActiveTab('main')}
-        >
-          Workspace
-        </button>
-        <button
-          className={activeTab === 'guards' ? 'active' : ''}
-          aria-pressed={activeTab === 'guards'}
-          onClick={() => setActiveTab('guards')}
-        >
-          Guards
-        </button>
-        <button
-          className={activeTab === 'adapters' ? 'active' : ''}
-          aria-pressed={activeTab === 'adapters'}
-          onClick={() => setActiveTab('adapters')}
-        >
-          Adapters
-        </button>
-      </nav>
+        <nav className="tabs" aria-label="Popup sections">
+          <button
+            className={activeTab === 'main' ? 'active' : ''}
+            aria-pressed={activeTab === 'main'}
+            onClick={() => setActiveTab('main')}
+          >
+            Workspace
+          </button>
+          <button
+            className={activeTab === 'guards' ? 'active' : ''}
+            aria-pressed={activeTab === 'guards'}
+            onClick={() => setActiveTab('guards')}
+          >
+            Automation
+          </button>
+          <button
+            className={activeTab === 'adapters' ? 'active' : ''}
+            aria-pressed={activeTab === 'adapters'}
+            onClick={() => setActiveTab('adapters')}
+          >
+            Adapters
+          </button>
+        </nav>
       </div>
 
       {activeTab === 'main' ? (
         <>
-          {statusLoaded ? <ConnectionPanel
-            bound={bound}
-            binding={binding}
-            daemon={daemon}
-            daemons={daemons}
-            scanning={scanning}
-            pairing={pairing}
-            selectedPort={selectedPort}
-            token={token}
-            pairError={pairError}
-            tabHost={tabHost}
-            contentActive={contentActive}
-            onSelectPort={setSelectedPort}
-            onToken={setToken}
-            onScan={() => void scan()}
-            onPair={() => void pair()}
-            onReconnect={() => void reconnect()}
-            onUnbind={() => void unbind()}
-          /> : <section role="status">Checking this tab’s workspace…</section>}
+          {statusLoaded ? (
+            <ConnectionPanel
+              bound={bound}
+              binding={binding}
+              daemon={daemon}
+              daemons={daemons}
+              scanning={scanning}
+              pairing={pairing}
+              selectedPort={selectedPort}
+              token={token}
+              pairError={pairError}
+              onSelectPort={setSelectedPort}
+              onToken={setToken}
+              onScan={() => void scan()}
+              onPair={() => void pair()}
+              onReconnect={() => void reconnect()}
+              onUnbind={() => void unbind()}
+            />
+          ) : <section role="status">Checking this tab’s workspace…</section>}
+
+          {binding && contentActive ? (
+            <section className="workspace-actions" aria-label="Chat controls">
+              <div className="row">
+                <button className="primary" disabled={!bound} onClick={() => void attachWorkspace()}>
+                  Insert workspace context
+                </button>
+                <button className={stopped ? '' : 'danger'} disabled={stopPending} onClick={() => void toggleStop()}>
+                  {stopped ? 'Resume automation' : 'Stop automation'}
+                </button>
+              </div>
+              {workspaceMessage ? <p className="dim small" role="status">{workspaceMessage}</p> : null}
+            </section>
+          ) : null}
 
           {bound ? (
             <DaemonPanel daemon={daemon} tools={tools} skills={skills} tabId={tabId} />
           ) : null}
 
-          <section>
-            <h2>Tab &amp; Diagnostics</h2>
+          <details className="diagnostics">
+            <summary>Chat tab diagnostics</summary>
             <div className="row">
               <span className={`badge ${contentActive ? 'ok' : 'warn'}`}>
                 {contentActive ? 'ACTIVE' : 'INACTIVE'}
@@ -302,7 +357,13 @@ export default function App(): JSX.Element {
                 </div>
               </div>
             ) : null}
-          </section>
+            {diag ? (
+              <div className="row">
+                <button onClick={() => void copyDiagnostics()}>Copy report</button>
+                <span className="dim small" role="status">{copyMessage}</span>
+              </div>
+            ) : null}
+          </details>
         </>
       ) : null}
 
@@ -312,10 +373,6 @@ export default function App(): JSX.Element {
 
       {activeTab === 'adapters' ? <AdapterPanel /> : null}
 
-      <footer>
-        <span>PhantomDock v0.1.0 · protocol v2</span>
-        <span>{tabHost || ''}</span>
-      </footer>
     </>
   );
 }
@@ -332,8 +389,6 @@ function ConnectionPanel(props: {
   selectedPort: number | null;
   token: string;
   pairError: string;
-  tabHost: string;
-  contentActive: boolean;
   onSelectPort: (p: number) => void;
   onToken: (t: string) => void;
   onScan: () => void;
@@ -342,25 +397,27 @@ function ConnectionPanel(props: {
   onUnbind: () => void;
 }): JSX.Element {
   const { bound, binding, daemon } = props;
+  const workspaceName = daemon?.cwd.split(/[\\/]/).filter(Boolean).at(-1);
   return (
-    <section>
-      <h2>Connection</h2>
+    <section className="connection">
       {bound ? (
         <>
-          <div className="row">
-            <span className="badge ok">BOUND</span>
-            <span className="mono small">127.0.0.1:{binding?.port}</span>
-            <div className="grow" />
-            <button onClick={props.onUnbind}>Unbind</button>
+          <div className="row connection-heading">
+            <div className="grow">
+              <h2>Local workspace</h2>
+              <h3 title={daemon?.cwd}>{workspaceName || daemon?.cwd || 'Workspace'}</h3>
+            </div>
+            <button onClick={props.onUnbind}>Disconnect</button>
           </div>
-          <div className="dim small mono">{daemon?.cwd}</div>
-          <div className="dim small">
-            shell {daemon?.shell_enabled ? 'enabled' : 'disabled'} · pid {daemon?.pid} · v
-            {daemon?.server_version}
+          <div className="workspace-path mono" title={daemon?.cwd}>{daemon?.cwd}</div>
+          <div className="connection-meta dim small">
+            <span className="mono">127.0.0.1:{binding?.port}</span>
+            <span>Shell {daemon?.shell_enabled ? 'enabled' : 'disabled'}</span>
           </div>
         </>
       ) : (
         <>
+          <h2>Connect a workspace</h2>
           {binding ? (
             <div className="row">
               <span className="badge err">DISCONNECTED</span>
@@ -381,7 +438,7 @@ function ConnectionPanel(props: {
           </div>
           {props.daemons.length === 0 && !props.scanning ? (
             <p className="dim small">
-              No daemon found. Start one with <span className="mono">pdock</span> and refresh.
+              Run <code>pdock</code> in your project folder, then refresh here.
             </p>
           ) : null}
           {props.daemons.map((d) => (
@@ -404,26 +461,24 @@ function ConnectionPanel(props: {
               {props.binding?.port === d.port ? <span className="badge">bound</span> : null}
             </button>
           ))}
-          <div className="row">
+          <form className="row pairing-form" onSubmit={(event) => { event.preventDefault(); props.onPair(); }}>
             <input
+              aria-label="Pairing token"
+              autoComplete="off"
+              disabled={props.pairing}
               type="password"
               placeholder="Pairing token (printed once by pdock)"
               value={props.token}
               onChange={(e) => props.onToken(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && props.selectedPort && props.token.trim()) {
-                  props.onPair();
-                }
-              }}
             />
             <button
               className="primary"
-              onClick={props.onPair}
-              disabled={!props.selectedPort || props.pairing}
+              type="submit"
+              disabled={!props.selectedPort || !props.token.trim() || props.pairing}
             >
               {props.pairing ? 'Pairing…' : 'Pair & Bind'}
             </button>
-          </div>
+          </form>
           {props.pairError ? <div className="error-box">{props.pairError}</div> : null}
         </>
       )}

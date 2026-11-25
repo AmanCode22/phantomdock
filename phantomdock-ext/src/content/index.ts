@@ -214,6 +214,7 @@ let activeBatch: TurnBatch | null = null;
 let activeCards = new Map<string, ToolCard>();
 let activeTurnGeneration = 0;
 let prependedThisThread = false;
+let daemonGeneration = 0;
 let cachedManifest: { xml: string; tools: ToolInfo[] } | null = null;
 const firedCallKeys = new Set<string>();
 
@@ -307,6 +308,8 @@ async function selectAdapter(): Promise<AdapterDef | null> {
 
 function applyDaemonState(binding: TabBinding | null, daemon: DaemonSnapshot | null): void {
   if (!ctx) return;
+  const generation = ++daemonGeneration;
+  cachedManifest = null;
   ctx.binding = binding;
   ctx.connected = Boolean(binding && daemon?.connected);
   ctx.tools = daemon?.tools ?? [];
@@ -317,13 +320,12 @@ function applyDaemonState(binding: TabBinding | null, daemon: DaemonSnapshot | n
     controlBar?.setSkills(ctx.skills);
     // Prefetch manifest so Attach Workspace & autoPrependFirstTurn are instant.
     void requestManifest().then((m) => {
-      if (m) {
+      if (m && ctx && generation === daemonGeneration) {
         cachedManifest = m;
-        if (ctx) ctx.tools = m.tools;
+        ctx.tools = m.tools;
       }
     });
   } else {
-    cachedManifest = null;
     controlBar?.setBound(false);
     controlBar?.setSkills([]);
   }
@@ -365,6 +367,8 @@ async function handlePortMessage(msg: Record<string, unknown>): Promise<void> {
       break;
     }
     case 'daemonDisconnected': {
+      daemonGeneration += 1;
+      cachedManifest = null;
       ctx.connected = false;
       controlBar?.setBound(false);
       controlBar?.showToast('pdock daemon disconnected', 'err');
@@ -377,6 +381,10 @@ async function handlePortMessage(msg: Record<string, unknown>): Promise<void> {
     }
     case 'stopChanged': {
       guards?.setStopped(Boolean(msg.stopped));
+      break;
+    }
+    case 'attachWorkspace': {
+      await attachWorkspace();
       break;
     }
     case 'attachSkill': {
@@ -500,29 +508,36 @@ async function attachWorkspace(): Promise<void> {
     controlBar?.showToast('Not paired — click the PhantomDock icon to pair with pdock.', 'err');
     return;
   }
+  const generation = daemonGeneration;
+  const thread = location.href;
+  const manifest = cachedManifest ?? (await requestManifest());
+  if (generation !== daemonGeneration || thread !== location.href) {
+    controlBar?.showToast('Workspace or chat changed. Insert context again in the current chat.', 'info');
+    return;
+  }
+  if (!manifest) {
+    controlBar?.showToast('Could not fetch workspace manifest from pdock.', 'err');
+    return;
+  }
   const input = findInput(ctx.adapter);
   if (!input) {
     controlBar?.showToast(`Chat input not found for adapter "${ctx.adapter.name}".`, 'err');
     return;
   }
-  const manifest = cachedManifest ?? (await requestManifest());
-  if (!manifest) {
-    controlBar?.showToast('Could not fetch workspace manifest from pdock.', 'err');
-    return;
-  }
   cachedManifest = manifest;
   ctx.tools = manifest.tools;
-  const ok = insertText(
-    input,
-    `${manifest.xml}\n\n(Silent workspace context — do not reply to this message. Wait for the user's actual request.)`,
-    false,
-  );
-  if (ok) {
-    prependedThisThread = true;
-    controlBar?.showToast('Workspace context inserted into chat input.', 'ok');
-  } else {
-    controlBar?.showToast('Failed to insert workspace context into input.', 'err');
+  const draft = readInputText(input);
+  if (!draft.startsWith(manifest.xml)) {
+    const suffix = draft.trim()
+      ? draft
+      : '(Workspace context for the next user request.)';
+    if (!insertText(input, `${manifest.xml}\n\n${suffix}`, true)) {
+      controlBar?.showToast('Failed to insert workspace context into input.', 'err');
+      return;
+    }
   }
+  prependedThisThread = true;
+  controlBar?.showToast('Workspace context is ready in the chat draft.', 'ok');
 }
 
 async function requestManifest(): Promise<{ xml: string; tools: ToolInfo[] } | null> {

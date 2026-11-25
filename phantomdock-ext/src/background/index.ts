@@ -385,7 +385,10 @@ chrome.runtime.onMessage.addListener(
             break;
           }
           case 'getStatus': {
-            const binding = await store.getBinding(msg.tabId);
+            const [binding, turnState] = await Promise.all([
+              store.getBinding(msg.tabId),
+              store.getTurnState(msg.tabId),
+            ]);
             let daemon: HandshakeInfo | null = null;
             let tools: ToolInfo[] = [];
             let skills: SkillSummary[] = [];
@@ -409,6 +412,7 @@ chrome.runtime.onMessage.addListener(
               skills,
               connected,
               contentActive: contentPorts.has(msg.tabId),
+              stopped: turnState.stopped,
             });
             break;
           }
@@ -444,6 +448,11 @@ chrome.runtime.onMessage.addListener(
             await store.deleteUserAdapter(msg.id);
             broadcastToContent({ t: 'adaptersChanged' });
             sendResponse({ ok: true });
+            break;
+          }
+          case 'attachWorkspace': {
+            const delivered = sendToTab(msg.tabId, { t: 'attachWorkspace' });
+            sendResponse(delivered ? { ok: true } : { ok: false, error: 'Chat controls are unavailable on this tab.' });
             break;
           }
           case 'attachSkill': {
