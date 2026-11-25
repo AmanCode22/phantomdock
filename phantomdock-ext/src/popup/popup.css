@@ -1,12 +1,13 @@
 /* PhantomDock popup — OS-adaptive (light/dark via prefers-color-scheme). */
 
 :root {
-  --bg: #f7f8fa;
+  color-scheme: light dark;
+  --bg: #f2f5f9;
   --panel: #ffffff;
   --fg: #16181d;
   --fg-dim: #5c6470;
   --border: #d8dde3;
-  --accent: #0e7490;
+  --accent: #315bc8;
   --accent-fg: #ffffff;
   --ok: #15803d;
   --warn: #b45309;
@@ -22,7 +23,7 @@
     --fg: #e8eaee;
     --fg-dim: #9aa3af;
     --border: #333a42;
-    --accent: #22d3ee;
+    --accent: #9bb5ff;
     --accent-fg: #06232b;
     --ok: #4ade80;
     --warn: #fbbf24;
@@ -37,55 +38,66 @@
 
 body {
   margin: 0;
-  width: 400px;
+  width: 420px;
   max-height: 580px;
+  scrollbar-gutter: stable;
   overflow-y: auto;
   background: var(--bg);
   color: var(--fg);
   font: 13px/1.45 -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif;
 }
 
+.popup-top {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
 header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 14px 8px;
+  gap: 10px;
+  padding: 16px 14px 12px;
 }
 header .logo {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, var(--accent), #6366f1);
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
 }
 header h1 {
-  font-size: 15px;
+  font-size: 18px;
+  line-height: 1.2;
   margin: 0;
-  flex: 1;
 }
-header .dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--fg-dim);
+.header-host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-header .dot.on {
-  background: var(--ok);
+.connection-status {
+  flex: none;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--fg-dim);
 }
-header .dot.off {
-  background: var(--err);
-}
+.connection-status.online { color: var(--ok); }
+.connection-status.offline { color: var(--err); }
 
 nav.tabs {
   display: flex;
   gap: 6px;
-  padding: 0 12px 4px;
+  padding: 0 12px 10px;
 }
 nav.tabs button {
   flex: 1;
   background: transparent;
   border: 1px solid var(--border);
   color: var(--fg-dim);
-  padding: 5px 8px;
+  padding: 7px 9px;
   font-size: 12px;
   font-weight: 500;
 }
@@ -119,6 +131,7 @@ section h2 {
 }
 .grow {
   flex: 1;
+  min-width: 0;
 }
 .dim {
   color: var(--fg-dim);
@@ -158,6 +171,7 @@ button:disabled {
   cursor: default;
 }
 
+input[type='search'],
 input[type='text'],
 input[type='password'],
 input[type='number'],
@@ -168,7 +182,7 @@ textarea {
   background: var(--bg);
   color: var(--fg);
   border-radius: 7px;
-  padding: 5px 8px;
+  padding: 7px 9px;
   font-size: 12px;
   font-family: inherit;
 }
@@ -179,6 +193,8 @@ textarea {
   resize: vertical;
   white-space: pre;
 }
+button:focus-visible,
+summary:focus-visible,
 input:focus,
 select:focus,
 textarea:focus {
@@ -187,6 +203,9 @@ textarea:focus {
 
 .daemon-option {
   display: flex;
+  width: 100%;
+  background: var(--bg);
+  text-align: left;
   align-items: center;
   gap: 8px;
   padding: 7px 8px;
@@ -272,3 +291,29 @@ footer {
   display: flex;
   justify-content: space-between;
 }
+
+.tool-list {
+  margin: 10px 0;
+  border-block: 1px solid var(--border);
+  padding: 7px 0;
+}
+.tool-list summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.tool-list ul {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 160px;
+  overflow: auto;
+}
+.tool-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+}
+.tool-list li .mono { overflow-wrap: anywhere; }
+.tool-list li .dim { flex: none; }

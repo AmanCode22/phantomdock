@@ -14,9 +14,12 @@ import {
 } from '../shared/protocol';
 import { validateAdapter, type AdapterDef } from '../adapters/schema';
 
-function send<T>(msg: BgRequest): Promise<T> {
+function send<T>(msg: BgRequest): Promise<T | undefined> {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage(msg, (resp: T) => resolve(resp));
+    chrome.runtime.sendMessage(msg, (resp: T) => {
+      const error = chrome.runtime.lastError;
+      resolve(error ? undefined : resp);
+    });
   });
 }
 
@@ -34,6 +37,7 @@ export default function App(): JSX.Element {
   const [contentActive, setContentActive] = useState(false);
   const [daemons, setDaemons] = useState<HandshakeInfo[]>([]);
   const [scanning, setScanning] = useState(false);
+  const [statusLoaded, setStatusLoaded] = useState(false);
   const [selectedPort, setSelectedPort] = useState<number | null>(null);
   const [token, setToken] = useState('');
   const [pairError, setPairError] = useState('');
@@ -48,6 +52,7 @@ export default function App(): JSX.Element {
   useEffect(() => {
     void (async () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id === undefined) setStatusLoaded(true);
       if (tab?.id !== undefined) {
         setTabId(tab.id);
         try {
@@ -82,6 +87,7 @@ export default function App(): JSX.Element {
       setConnected(res.connected);
       setContentActive(Boolean(res.contentActive));
     }
+    setStatusLoaded(true);
   }, [tabId]);
 
   const scan = useCallback(async () => {
@@ -90,16 +96,17 @@ export default function App(): JSX.Element {
     const res = await send<{ ok: boolean; daemons: HandshakeInfo[] }>({ t: 'scan' });
     if (res?.ok) {
       setDaemons(res.daemons);
-      if (res.daemons.length && selectedPortRef.current === null) {
-        setSelectedPort(res.daemons[0].port);
+      if (!res.daemons.some((daemon) => daemon.port === selectedPortRef.current)) {
+        setSelectedPort(res.daemons[0]?.port ?? null);
       }
     }
     setScanning(false);
   }, []);
 
+  const hasBinding = binding !== null;
   useEffect(() => {
-    void scan();
-  }, [scan]);
+    if (statusLoaded && !hasBinding) void scan();
+  }, [statusLoaded, hasBinding, scan]);
 
   useEffect(() => {
     void refreshStatus();
@@ -195,42 +202,50 @@ export default function App(): JSX.Element {
   }, [tabId, refreshStatus]);
 
   const bound = binding !== null && connected;
+  const connectionLabel = !statusLoaded ? 'Checking…' : bound ? 'Connected' : binding ? 'Disconnected' : 'Not paired';
 
   return (
     <>
-      <header>
-        <div className="logo" />
-        <h1>PhantomDock</h1>
-        <span
-          className={`dot ${bound ? 'on' : binding ? 'off' : ''}`}
-          title={bound ? 'connected' : binding ? 'disconnected' : 'not paired'}
-        />
-      </header>
+      <div className="popup-top">
+        <header>
+          <img className="logo" src="./icons/icon48.png" alt="" />
+          <div className="grow">
+            <h1>PhantomDock</h1>
+            <div className="dim small header-host">{tabHost || 'Local workspace'}</div>
+          </div>
+          <span className={`connection-status ${bound ? 'online' : binding ? 'offline' : ''}`} role="status">
+            {connectionLabel}
+          </span>
+        </header>
 
-      <nav className="tabs">
+      <nav className="tabs" aria-label="Popup sections">
         <button
           className={activeTab === 'main' ? 'active' : ''}
+          aria-pressed={activeTab === 'main'}
           onClick={() => setActiveTab('main')}
         >
           Workspace
         </button>
         <button
           className={activeTab === 'guards' ? 'active' : ''}
+          aria-pressed={activeTab === 'guards'}
           onClick={() => setActiveTab('guards')}
         >
           Guards
         </button>
         <button
           className={activeTab === 'adapters' ? 'active' : ''}
+          aria-pressed={activeTab === 'adapters'}
           onClick={() => setActiveTab('adapters')}
         >
           Adapters
         </button>
       </nav>
+      </div>
 
       {activeTab === 'main' ? (
         <>
-          <ConnectionPanel
+          {statusLoaded ? <ConnectionPanel
             bound={bound}
             binding={binding}
             daemon={daemon}
@@ -248,7 +263,7 @@ export default function App(): JSX.Element {
             onPair={() => void pair()}
             onReconnect={() => void reconnect()}
             onUnbind={() => void unbind()}
-          />
+          /> : <section role="status">Checking this tab’s workspace…</section>}
 
           {bound ? (
             <DaemonPanel daemon={daemon} tools={tools} skills={skills} tabId={tabId} />
@@ -370,7 +385,9 @@ function ConnectionPanel(props: {
             </p>
           ) : null}
           {props.daemons.map((d) => (
-            <div
+            <button
+              type="button"
+              aria-pressed={props.selectedPort === d.port}
               key={d.port}
               className={`daemon-option ${props.selectedPort === d.port ? 'selected' : ''}`}
               onClick={() => props.onSelectPort(d.port)}
@@ -385,7 +402,7 @@ function ConnectionPanel(props: {
                 </div>
               </div>
               {props.binding?.port === d.port ? <span className="badge">bound</span> : null}
-            </div>
+            </button>
           ))}
           <div className="row">
             <input
@@ -434,6 +451,12 @@ function DaemonPanel(props: {
 }): JSX.Element {
   const { daemon, tools, skills } = props;
   const [attachMsg, setAttachMsg] = useState('');
+  const [query, setQuery] = useState('');
+  const filter = query.trim().toLowerCase();
+  const visibleSkills = skills.filter((skill) =>
+    `${skill.name} ${skill.description}`.toLowerCase().includes(filter),
+  );
+  const visibleTools = tools.filter((tool) => tool.name.toLowerCase().includes(filter));
 
   const attachSkill = async (name: string): Promise<void> => {
     if (props.tabId === null) return;
@@ -451,12 +474,32 @@ function DaemonPanel(props: {
   const readonly = tools.filter((t) => t.readonly).length;
   return (
     <section>
-      <h2>Workspace · Skills · MCP</h2>
+      <h2>Workspace resources</h2>
+      <input
+        type="search"
+        aria-label="Search skills and tools"
+        placeholder="Search skills and tools…"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+      />
       <div className="row">
         <span className="small">
           {tools.length} tools ({readonly} read-only · {tools.length - readonly} need approval)
         </span>
       </div>
+      <details className="tool-list" open={filter ? true : undefined}>
+        <summary>Tools ({visibleTools.length})</summary>
+        {visibleTools.length ? (
+          <ul>
+            {visibleTools.map((tool) => (
+              <li key={tool.name}>
+                <span className="mono">{tool.name}</span>
+                <span className="dim small">{tool.readonly ? 'Read-only' : 'Approval needed'}</span>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="dim small">No matching tools.</p>}
+      </details>
       {daemon?.mcp_servers.length ? (
         <div style={{ marginTop: 6 }}>
           {daemon.mcp_servers.map((s) => (
@@ -483,7 +526,7 @@ function DaemonPanel(props: {
             <span className="mono">.phantomdock/skills/&lt;name&gt;/SKILL.md</span>.
           </div>
         ) : (
-          skills.map((s) => (
+          visibleSkills.length ? visibleSkills.map((s) => (
             <div key={s.name} className="skill-item">
               <div className="grow">
                 <div className="mono small" style={{ fontWeight: 600 }}>
@@ -493,7 +536,7 @@ function DaemonPanel(props: {
               </div>
               <button onClick={() => void attachSkill(s.name)}>Attach</button>
             </div>
-          ))
+          )) : <div className="dim small">No matching skills.</div>
         )}
       </div>
       {attachMsg ? <div className="dim small">{attachMsg}</div> : null}
