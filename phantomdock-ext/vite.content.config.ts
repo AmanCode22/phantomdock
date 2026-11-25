@@ -8,7 +8,6 @@ export default defineConfig({
     outDir: `dist/${target}`,
     emptyOutDir: false,
     target: 'es2022',
-    minify: false,
     lib: {
       entry: 'src/content/index.ts',
       formats: ['iife'],

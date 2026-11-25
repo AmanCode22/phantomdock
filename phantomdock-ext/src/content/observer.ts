@@ -38,6 +38,8 @@ export class StreamObserver {
   private throttleTimer: ReturnType<typeof setTimeout> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private lastHandledAssistantText = '';
+  private lastHandledAssistantEl: HTMLElement | null = null;
+  private pendingAssistant: { el: HTMLElement; text: string } | null = null;
   private lastHref = '';
   private wasStreaming = false;
   private seenUserElements = new WeakSet<Element>();
@@ -91,6 +93,7 @@ export class StreamObserver {
     if (this.throttleTimer) clearTimeout(this.throttleTimer);
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.quietTimer = null;
+    this.pendingAssistant = null;
     this.throttleTimer = null;
     this.pollTimer = null;
   }
@@ -109,6 +112,7 @@ export class StreamObserver {
       clearTimeout(this.quietTimer);
       this.quietTimer = null;
     }
+    this.pendingAssistant = null;
   }
 
   /**
@@ -130,7 +134,11 @@ export class StreamObserver {
    */
   snapshotLastAssistant(): void {
     const el = this.lastAssistantEl();
+    this.lastHandledAssistantEl = el;
     this.lastHandledAssistantText = el ? this.assistantText(el) : '';
+    if (this.quietTimer) clearTimeout(this.quietTimer);
+    this.quietTimer = null;
+    this.pendingAssistant = null;
   }
 
   isStreamingNow(): boolean {
@@ -147,6 +155,8 @@ export class StreamObserver {
     if (location.href !== this.lastHref) {
       this.lastHref = location.href;
       this.lastHandledAssistantText = '';
+      this.lastHandledAssistantEl = null;
+      this.pendingAssistant = null;
       this.wasStreaming = false;
       if (this.quietTimer) {
         clearTimeout(this.quietTimer);
@@ -206,15 +216,21 @@ export class StreamObserver {
         clearTimeout(this.quietTimer);
         this.quietTimer = null;
       }
+      this.pendingAssistant = null;
       return;
     }
 
     const lastAssistant = this.lastAssistantEl();
     if (!lastAssistant) return;
     const text = this.assistantText(lastAssistant);
-    if (!text.trim() || text === this.lastHandledAssistantText) return;
+    if (!text.trim() || (lastAssistant === this.lastHandledAssistantEl && text === this.lastHandledAssistantText)) return;
+
+    // Unrelated page mutations and the fallback poll must not extend the quiet
+    // window. Restart it only when the assistant message itself has changed.
+    if (this.quietTimer && this.pendingAssistant?.el === lastAssistant && this.pendingAssistant.text === text) return;
 
     if (this.quietTimer) clearTimeout(this.quietTimer);
+    this.pendingAssistant = { el: lastAssistant, text };
     this.quietTimer = setTimeout(() => {
       this.quietTimer = null;
       this.onStreamQuiet();
@@ -226,15 +242,25 @@ export class StreamObserver {
     const el = this.lastAssistantEl();
     if (!el) return;
     const text = this.assistantText(el);
-    if (!text || text === this.lastHandledAssistantText) return;
+    if (!text || (el === this.lastHandledAssistantEl && text === this.lastHandledAssistantText)) return;
+    // A final mutation may have arrived just before the timer fired.
+    if (el !== this.pendingAssistant?.el || text !== this.pendingAssistant.text) {
+      this.pendingAssistant = null;
+      this.trackStreaming();
+      return;
+    }
+    this.pendingAssistant = null;
 
     const parsed = parsePdockCallsFromElement(
       el,
       this.adapter.selectors.messageMarkdownBody,
       this.adapter.selectors.userMessage,
     );
+    // Remember plain responses too, so the fallback poll does not reparse them
+    // forever. A later change to the same message will still be examined.
+    this.lastHandledAssistantEl = el;
+    this.lastHandledAssistantText = text;
     if (parsed.calls.length > 0) {
-      this.lastHandledAssistantText = text;
       this.events.onToolTurn(parsed.calls, el);
     }
   }
