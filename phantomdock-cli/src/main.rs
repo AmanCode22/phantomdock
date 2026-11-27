@@ -154,9 +154,17 @@ fn run_config_command(
             cfg.skill_dirs.retain(|d| d != &dir);
             if cfg.skill_dirs.len() < before {
                 config::save(&path, &cfg)?;
-                println!("Removed skill_dir '{}' from {}", dir.display(), path.display());
+                println!(
+                    "Removed skill_dir '{}' from {}",
+                    dir.display(),
+                    path.display()
+                );
             } else {
-                println!("skill_dir '{}' was not in {}", dir.display(), path.display());
+                println!(
+                    "skill_dir '{}' was not in {}",
+                    dir.display(),
+                    path.display()
+                );
             }
         }
         ConfigAction::AddMcpDir { dir } => {
@@ -175,7 +183,11 @@ fn run_config_command(
             cfg.mcp_dirs.retain(|d| d != &dir);
             if cfg.mcp_dirs.len() < before {
                 config::save(&path, &cfg)?;
-                println!("Removed mcp_dir '{}' from {}", dir.display(), path.display());
+                println!(
+                    "Removed mcp_dir '{}' from {}",
+                    dir.display(),
+                    path.display()
+                );
             } else {
                 println!("mcp_dir '{}' was not in {}", dir.display(), path.display());
             }
@@ -185,7 +197,11 @@ fn run_config_command(
             if !cfg.mcp_configs.contains(&file) {
                 cfg.mcp_configs.push(file.clone());
                 config::save(&path, &cfg)?;
-                println!("Added mcp_config '{}' to {}", file.display(), path.display());
+                println!(
+                    "Added mcp_config '{}' to {}",
+                    file.display(),
+                    path.display()
+                );
             } else {
                 println!("mcp_config '{}' already configured", file.display());
             }
@@ -320,7 +336,9 @@ fn print_banner(
     println!("  MCP       : {mcp_line}");
     println!(
         "  Config    : {}",
-        config_source.unwrap_or("built-in defaults (run `pdock config init` to create ~/.pdock/config.toml)")
+        config_source.unwrap_or(
+            "built-in defaults (run `pdock config init` to create ~/.pdock/config.toml)"
+        )
     );
     println!("───────────────────────────────────────────────────────────────");
     println!("  Pairing token (shown ONCE — paste it into the PhantomDock popup):");

@@ -269,7 +269,9 @@ pub fn builtin_tool_infos(shell_enabled: bool) -> Vec<ToolInfo> {
             name: "list_skills".into(),
             category: ToolCategory::Skill,
             readonly: true,
-            description: "List installed skills with pagination (page, page_size) and optional query filter.".into(),
+            description:
+                "List installed skills with pagination (page, page_size) and optional query filter."
+                    .into(),
         },
         ToolInfo {
             name: "activate_skill".into(),
@@ -287,7 +289,9 @@ pub fn builtin_tool_infos(shell_enabled: bool) -> Vec<ToolInfo> {
             name: "list_mcp_tools".into(),
             category: ToolCategory::Mcp,
             readonly: true,
-            description: "List MCP tools and input schemas with pagination (server, page, page_size, query).".into(),
+            description:
+                "List MCP tools and input schemas with pagination (server, page, page_size, query)."
+                    .into(),
         },
     ];
     if shell_enabled {
@@ -443,7 +447,8 @@ mod tests {
                 content: "body".into(),
             }],
         };
-        let xml_pop = build_workspace_context(false, &McpManager::empty(), &populated, Path::new("/w"));
+        let xml_pop =
+            build_workspace_context(false, &McpManager::empty(), &populated, Path::new("/w"));
         assert!(xml_pop.contains("count=\"1\""));
         assert!(!xml_pop.contains("secret-skill-name"));
 

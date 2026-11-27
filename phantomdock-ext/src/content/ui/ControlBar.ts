@@ -23,6 +23,10 @@ export class ControlBar {
   private statusEl: HTMLSpanElement;
   private budgetEl: HTMLSpanElement;
   private skillMenu: HTMLDivElement;
+  private skillSearch: HTMLInputElement;
+  private skillResults: HTMLDivElement;
+  private skillBtn: HTMLButtonElement;
+  private workspaceBtn: HTMLButtonElement;
   private stopped = false;
   private bound = false;
   private boundLabel = '';
@@ -56,40 +60,54 @@ export class ControlBar {
     });
     this.statusEl = h('span', { class: 'dim', text: bound ? 'ready' : 'not paired' });
     this.budgetEl = h('span', { class: 'dim mono' });
-    this.skillMenu = h('div', {
-      class: 'panel',
-      style: 'position:absolute;bottom:48px;right:0;min-width:260px;max-height:260px;overflow-y:auto;padding:8px;display:none;pointer-events:auto;',
+    this.skillSearch = h('input', {
+      type: 'search',
+      class: 'skill-search',
+      placeholder: 'Find a skill…',
+      'aria-label': 'Find a skill',
+      oninput: () => this.renderSkillMenu(),
     });
+    this.skillResults = h('div', { class: 'skill-results' });
+    this.skillMenu = h('div', {
+      class: 'panel skill-menu',
+      id: 'pdock-skill-picker',
+      hidden: true,
+      onkeydown: (event) => {
+        if ((event as KeyboardEvent).key === 'Escape') {
+          event.stopPropagation();
+          this.toggleSkills(false, true);
+        }
+      },
+    }, [this.skillSearch, this.skillResults]);
     this.toastEl = h('div', {
       class: 'toast',
       style: 'display:none;pointer-events:auto;',
     });
 
-    const skillBtn = h('button', {
+    this.skillBtn = h('button', {
       class: 'btn',
       text: 'Skills',
-      onclick: () => {
-        const show = this.skillMenu.style.display === 'none';
-        this.skillMenu.style.display = show ? 'block' : 'none';
-        if (show) this.renderSkillMenu();
-      },
+      'aria-expanded': 'false',
+      'aria-controls': 'pdock-skill-picker',
+      onclick: () => this.toggleSkills(this.skillMenu.hidden, true),
     });
-    const wsBtn = h('button', {
+    this.workspaceBtn = h('button', {
       class: 'btn primary',
-      text: 'Attach Workspace',
+      text: 'Insert context',
       onclick: () => this.callbacks.onAttachWorkspace(),
     });
 
     this.el = h(
       'div',
       {
-        class: 'panel',
-        style: 'position:relative;display:flex;gap:8px;padding:8px 10px;align-items:center;pointer-events:auto;',
+        class: 'panel dock-controls',
+        role: 'group',
+        'aria-label': 'PhantomDock chat controls',
       },
       [
         this.dotEl,
-        wsBtn,
-        skillBtn,
+        this.workspaceBtn,
+        this.skillBtn,
         this.cancelBtn,
         this.stopBtn,
         this.budgetEl,
@@ -98,6 +116,7 @@ export class ControlBar {
       ],
     );
     root.float.append(this.toastEl, this.el);
+    this.setBound(bound);
     this.renderStop();
     this.renderStatus();
   }
@@ -108,28 +127,40 @@ export class ControlBar {
     this.stopBtn.classList.toggle('primary', this.stopped);
   }
 
+  private toggleSkills(open: boolean, focus = false): void {
+    this.skillMenu.hidden = !open;
+    this.skillBtn.setAttribute('aria-expanded', String(open));
+    if (open) {
+      this.skillSearch.value = '';
+      this.renderSkillMenu();
+      if (focus) this.skillSearch.focus();
+    } else if (focus) {
+      this.skillBtn.focus();
+    }
+  }
+
   private renderSkillMenu(): void {
-    this.skillMenu.replaceChildren();
-    if (!this.skills.length) {
-      this.skillMenu.append(
-        h('div', {
-          class: 'dim',
-          text: this.bound
-            ? 'No skills discovered by pdock.'
-            : 'Pair with pdock first to load skills.',
-        }),
-      );
+    const query = this.skillSearch.value.trim().toLowerCase();
+    const matches = this.skills.filter((skill) =>
+      `${skill.name} ${skill.description}`.toLowerCase().includes(query),
+    );
+    this.skillResults.replaceChildren();
+    if (!matches.length) {
+      this.skillResults.append(h('div', {
+        class: 'dim',
+        text: this.skills.length ? 'No matching skills.' : 'No skills in this workspace.',
+      }));
       return;
     }
-    for (const s of this.skills) {
-      this.skillMenu.append(
+    for (const s of matches) {
+      this.skillResults.append(
         h(
           'button',
           {
             class: 'btn ghost',
             style: 'display:block;width:100%;text-align:left;margin:2px 0;white-space:normal;',
             onclick: () => {
-              this.skillMenu.style.display = 'none';
+              this.toggleSkills(false);
               this.callbacks.onAttachSkill(s.name);
             },
           },
@@ -174,6 +205,9 @@ export class ControlBar {
 
   setBound(bound: boolean, label?: string): void {
     this.bound = bound;
+    this.workspaceBtn.disabled = !bound;
+    this.skillBtn.disabled = !bound;
+    if (!bound) this.toggleSkills(false);
     if (label !== undefined) {
       this.boundLabel = label;
     } else if (!bound) {
@@ -184,7 +218,7 @@ export class ControlBar {
 
   setSkills(skills: SkillSummary[]): void {
     this.skills = skills;
-    if (this.skillMenu.style.display !== 'none') {
+    if (!this.skillMenu.hidden) {
       this.renderSkillMenu();
     }
   }
