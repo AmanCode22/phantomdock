@@ -264,17 +264,27 @@ impl Manager {
             for t in c.tools() {
                 let fq = format!("mcp__{server}__{}", t.name);
                 if let Some(ref q) = query {
-                    if !fq.to_lowercase().contains(q)
-                        && !t.description.to_lowercase().contains(q)
-                    {
+                    if !fq.to_lowercase().contains(q) && !t.description.to_lowercase().contains(q) {
                         continue;
                     }
                 }
-                entries.push((server.clone(), fq, t.description.clone(), t.input_schema.clone()));
+                entries.push((
+                    server.clone(),
+                    fq,
+                    t.description.clone(),
+                    t.input_schema.clone(),
+                ));
             }
         }
         entries.sort_by(|a, b| a.1.cmp(&b.1));
-        format_mcp_tool_page(&entries, page, page_size, include_schema, server_filter.as_deref(), query.as_deref())
+        format_mcp_tool_page(
+            &entries,
+            page,
+            page_size,
+            include_schema,
+            server_filter.as_deref(),
+            query.as_deref(),
+        )
     }
 
     pub async fn call_tool(
@@ -355,7 +365,10 @@ fn format_mcp_tool_page(
     Ok(ToolOk::ok(out))
 }
 
-fn extract_stdio_servers(map: &serde_json::Map<String, Value>, out: &mut BTreeMap<String, McpServerDef>) {
+fn extract_stdio_servers(
+    map: &serde_json::Map<String, Value>,
+    out: &mut BTreeMap<String, McpServerDef>,
+) {
     for (name, val) in map {
         if out.contains_key(name) {
             continue;
@@ -508,12 +521,7 @@ mod tests {
         fs::create_dir_all(&custom_dir).unwrap();
         fs::write(custom_dir.join("tools.json"), r#"{"mcpServers":{}}"#).unwrap();
 
-        let found = discover_config_paths(
-            tmp.path(),
-            None,
-            &[],
-            std::slice::from_ref(&custom_dir),
-        );
+        let found = discover_config_paths(tmp.path(), None, &[], std::slice::from_ref(&custom_dir));
         assert!(found.iter().any(|p| p.ends_with(".mcp.json")));
         assert!(found.iter().any(|p| p.ends_with("tools.json")));
     }
